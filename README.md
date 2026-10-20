@@ -89,7 +89,7 @@ Web UI 设置页里改（推荐），或者给 profile 的 `cordis.patch.yml` �
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `mode` | `forward` | `forward`=连 NapCat；`reverse`=监听等 NapCat 拨入 |
-| `url` | `ws://127.0.0.1:3001` | forward 目标（NapCat 在云上就写云的公网 IP） |
+| `url` | 空 | forward 目标（NapCat 在云上就写云的公网 IP）；**留空 = 不连接**，去设置页填 |
 | `accessToken` | 空 | OneBot token；forward 作为 Bearer 发出，reverse 校验来者 |
 | `host` / `port` | `127.0.0.1` / `8643` | reverse 监听；NapCat 在别的机器上必须 `host: 0.0.0.0` |
 | `botQQ` | 空 | 机器人自己的 QQ；留空自动学习（影响 @ 门控） |
@@ -102,7 +102,7 @@ Web UI 设置页里改（推荐），或者给 profile 的 `cordis.patch.yml` �
 | `ignoreSelf` | `true` | 忽略机器人自己的消息 |
 | `replyAsQuote` | `false` | 回复时引用原消息 |
 | `splitMaxChars` | `1200` | 单条消息最大字数，超出自动分段；`0`=不分段 |
-| `reconnectMaxAttempts` | `50` | forward 连续失败多少次后放弃；`0`=无限 |
+| `reconnectMaxAttempts` | `0` | forward 连续失败多少次后放弃；`0`=无限重试（退避封顶 60s，日志限流） |
 | `workspacePath` | 空 | QQ 会话挂载的工作区；空=宿主 cwd |
 | `agentPreset` | 空 | 挂载的 agent preset |
 | `provider` / `model` | 空 | 覆盖模型（空=宿主默认） |

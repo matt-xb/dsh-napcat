@@ -35,6 +35,12 @@ export declare class OneBotConnection {
     private attempts;
     private stopped;
     private reconnectTimer;
+    /** 上一次连接错误（用于把"为什么没连上"合并进一条日志）。 */
+    private lastError;
+    /** url 为空的提示只打一次。 */
+    private missingUrlWarned;
+    /** 只在连接状态真正变化时上报，避免每次重试都刷"通道断开"。 */
+    private wasConnected;
     constructor(opts: OneBotOptions);
     get connected(): boolean;
     start(): void;
@@ -45,6 +51,7 @@ export declare class OneBotConnection {
      */
     call<T = unknown>(action: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<T>;
     private connect;
+    /** 退避重连；日志限流：前 3 次 + 每 10 次一条，其余降到 debug。 */
     private scheduleReconnect;
     private startServer;
     private dropSocket;
