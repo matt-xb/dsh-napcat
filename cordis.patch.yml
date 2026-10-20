@@ -1,0 +1,19 @@
+# dsh-napcat 的 bundle patch（package.json 里 dsh.bundle.patch 指向本文件）。
+#
+# 宿主加载 profile 时会读本文件并把下面的行插进组合（cordis 组合 = 插件行列表）。
+# name 用「裸包名」：插件被 pnpm 装进 $DSH_HOME/profiles/<名字>/node_modules 后，
+# 由运行时的模块解析链找到它（和 dsh-onebot 的写法一致）。
+#
+# 想改配置（连哪台 NapCat、token、管理员）有三个地方，任选其一：
+#   1. Web UI 的设置页（推荐；写回 profile 层的同 id 行）
+#   2. profile 的 cordis.patch.yml 里给本行加 config: 覆盖（见下）
+#   3. 直接把 config 写在本文件里（随插件包分发，改动需要重新发布）
+- insert:
+  - id: dsh-napcat
+    name: 'dsh-napcat'
+    # config 覆盖示例（NapCat 在云服务器、插件正向拨过去）：
+    # config:
+    #   mode: forward
+    #   url: 'ws://81.70.163.182:3001'
+    #   accessToken: '与 NapCat 里配置的一致'
+    #   adminUsers: ['你的QQ号']
