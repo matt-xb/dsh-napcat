@@ -149,12 +149,20 @@ node --test test/   # 纯逻辑单测（8 个用例）
 
 ## Roadmap
 
-- [ ] 图片入站（下载 → 多模态消息段）、图片出站工具
-- [ ] 语音：ffmpeg 转码 + whisper 转写（非阻塞占位）
-- [ ] t2i 文字图卡片（长回复渲染成图片，避免 QQ 文本限制）
-- [ ] 斜杠命令（`/new` `/stop` `/status` `/model`）
-- [ ] 队列/插话策略（任务运行中收到新消息）
-- [ ] 入站录制 + 离线回放（调试期非常有用）
+完整规划（当前能力清单、7 个同类项目横向对比、分阶段任务与验收标准）见
+[docs/ROADMAP.md](docs/ROADMAP.md)。摘要：
+
+| 版本 | 目标 |
+|---|---|
+| v0.1 | WS 通道 + 3 工具 + 单测 + CI（已发布，待真实 NapCat 联调） |
+| v0.2 | 观感与稳定：👀 回执、markdown 清洗、消息去重、限流、过程消息、`/help` `/status` `/new` `/stop` |
+| v0.3 | 多模态与交付：图片/文件入站出站、语音转写、t2i 卡片、引用展开 |
+| v0.4 | 群记忆 + 每群 skills + 定时提醒 + 主动发言（默认关） |
+| v0.5 | 设置页 UI、`/doctor` 诊断包、录制回放、HTTP 上报模式 |
+
+**不做**：多渠道（飞书/微信/钉钉）、多账号矩阵、QQ 官方 Bot API、人格框架 —— 那些是
+[`dsh-im`](https://github.com/xmanrui/dsh-im) / [`dsh-im-connect`](https://github.com/MichengAI/dsh-im-connect) /
+[`dsh-onebot`](https://github.com/mario841859784/dsh-onebot) 的地盘。
 
 ## License
 
