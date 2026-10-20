@@ -82,8 +82,22 @@ export function registerTools(ctx: Context, conn: OneBotConnection, log: (level:
     output: textOutput(),
     isConcurrencySafe: () => true,
     execute: async () => {
-      const friends = await conn.call<ObFriendInfo[]>('get_friend_list', {}).catch(() => [] as ObFriendInfo[])
-      const groups = await conn.call<ObGroupInfo[]>('get_group_list', {}).catch(() => [] as ObGroupInfo[])
+      let friends: ObFriendInfo[] = []
+      let groups: ObGroupInfo[] = []
+      let firstError: string | undefined
+      try {
+        friends = await conn.call<ObFriendInfo[]>('get_friend_list', {})
+      } catch (error) {
+        firstError = error instanceof Error ? error.message : String(error)
+      }
+      try {
+        groups = await conn.call<ObGroupInfo[]>('get_group_list', {})
+      } catch (error) {
+        firstError = firstError ?? (error instanceof Error ? error.message : String(error))
+      }
+      if (friends.length === 0 && groups.length === 0 && firstError !== undefined) {
+        throw new Error('取好友/群失败：' + firstError + '（多半是 NapCat 未连接：检查 mode/url/accessToken，以及反向 WS 是否已接入）')
+      }
       const lines: string[] = []
       lines.push('好友（' + friends.length + '）：')
       for (const friend of friends.slice(0, 50)) {
