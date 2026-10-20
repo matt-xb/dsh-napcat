@@ -1,7 +1,7 @@
 {
   "name": "dsh-napcat",
-  "version": "0.1.1",
-  "description": "NapCat / OneBot 11 通道插件：把 DeepSeek Harness 变成 QQ 机器人（私聊 + 群聊、@门控、白名单、长文分段、工具主动发送）。",
+  "version": "0.2.0",
+  "description": "NapCat / OneBot 11 通道插件：把 DeepSeek Harness 变成 QQ 机器人（私聊 + 群聊、@门控、白名单、长文分段、工具主动发送、设置页配置）。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -10,10 +10,12 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": "./client/index.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "client",
     "cordis.patch.yml",
     "dsh.plugin.json"
   ],
@@ -45,6 +47,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     }
   },
   "peerDependencies": {
