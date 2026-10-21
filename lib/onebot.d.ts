@@ -44,6 +44,8 @@ export declare class OneBotConnection {
     constructor(opts: OneBotOptions);
     get connected(): boolean;
     start(): void;
+    /** 设置页改了连接参数：就地换参数并重建 socket/服务端（bridge/tools 持有的实例不变）。 */
+    reconfigure(patch: Partial<OneBotOptions>): void;
     stop(): Promise<void>;
     /**
      * 调用一个 OneBot 动作并等待回执。

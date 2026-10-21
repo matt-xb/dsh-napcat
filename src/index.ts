@@ -11,7 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { Bridge } from './bridge.js'
-import { Config } from './config.js'
+import { Config, resolveConfig } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { OneBotConnection, type LogLevel } from './onebot.js'
 import { registerTools } from './tools.js'
@@ -25,7 +25,9 @@ export const inject = ['tools', 'agents']
 
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2 }
 
-export function apply(ctx: Context, config: ConfigShape): void {
+export function apply(ctx: Context, rawConfig: ConfigShape): void {
+  // volatile 字段可能没有 schema 默认值，统一用内置默认值补齐
+  const config = resolveConfig(rawConfig)
   const threshold = LEVEL_RANK[config.logLevel] ?? 1
   const log = (level: LogLevel, message: string): void => {
     if ((LEVEL_RANK[level] ?? 1) < threshold) return
@@ -66,6 +68,28 @@ export function apply(ctx: Context, config: ConfigShape): void {
   }
 
   registerTools(ctx, conn, log)
+
+  // volatile 配置是"活值"：设置页保存不会重挂载插件，这里自己重建连接。
+  const subscribeSettings = (ctx as unknown as {
+    on(name: string, listener: (ns: string) => void): () => void
+  })
+  ctx.effect(() =>
+    subscribeSettings.on('settings/document-updated', ns => {
+      if (ns !== 'dsh-napcat') return
+      const next = resolveConfig(rawConfig)
+      if (JSON.stringify(next) === JSON.stringify(config)) return
+      Object.assign(config, next)
+      log('info', '配置已更新（设置页保存），重建 NapCat 连接')
+      conn.reconfigure({
+        mode: next.mode,
+        url: next.url,
+        host: next.host,
+        port: next.port,
+        accessToken: next.accessToken,
+        reconnectMaxAttempts: next.reconnectMaxAttempts,
+      })
+    }),
+  )
 
   ctx.effect(() => {
     bridge.start()

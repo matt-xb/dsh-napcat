@@ -45,3 +45,14 @@ export interface Config {
     logLevel: 'debug' | 'info' | 'warn';
 }
 export declare const Config: Z<Config>;
+/** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */
+export declare const DEFAULTS: Config;
+/** volatile 字段在运行时是 `{ get(): T }` 的稳定引用（cosmokit 的 Volatile）。 */
+interface VolatileRef<T> {
+    get(): T;
+}
+/** 取活值：volatile 引用调 get()，普通值原样返回。 */
+export declare function readVolatile<T>(value: T | VolatileRef<T> | undefined): T | undefined;
+/** 用内置默认值补齐调用方配置（volatile 字段读出来是引用，需要 get()）。 */
+export declare function resolveConfig(input: Partial<Config> | undefined): Config;
+export {};
