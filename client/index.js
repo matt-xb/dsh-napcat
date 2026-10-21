@@ -31,7 +31,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
       /** 设置页字段（与 src/config.ts 的 Config 一一对应）。 */
       const FIELDS = [
         { key: 'mode', label: '连接方式', kind: 'select', options: [['forward', 'forward：插件连 NapCat'], ['reverse', 'reverse：NapCat 拨入']] },
-        { key: 'url', label: 'NapCat WebSocket 地址', kind: 'text', placeholder: 'ws://81.70.163.182:3001' },
+        { key: 'url', label: 'NapCat WebSocket 地址', kind: 'text', placeholder: 'ws://<napcat-host>:3001' },
         { key: 'accessToken', label: 'Access Token', kind: 'password', placeholder: '与 NapCat 的 WebSocket 服务器一致' },
         { key: 'host', label: 'reverse 监听地址', kind: 'text', placeholder: '0.0.0.0（NapCat 在别的机器上）' },
         { key: 'port', label: 'reverse 监听端口', kind: 'number' },
@@ -137,10 +137,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             onChange: (event) => onChange(field.key, event.target.value === '' ? undefined : Number(event.target.value)),
           })
         } else if (field.kind === 'list') {
+          // value 这里就是原始文本（不是数组）：输入过程中逗号/空格原样保留，
+          // 由调用方在 onChange 里解析成数组，避免"刚敲下的逗号被吃掉"。
           control = react.createElement('input', {
             id, type: 'text', style: style.input, placeholder: field.placeholder,
-            value: Array.isArray(value) ? value.join(', ') : String(value == null ? '' : value),
-            onChange: (event) => onChange(field.key, toList(event.target.value)),
+            value: value == null ? '' : String(value),
+            onChange: (event) => onChange(field.key, event.target.value),
           })
         } else {
           control = react.createElement('input', {
@@ -182,7 +184,13 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
               setState({ phase: 'missing' })
               return
             }
-            setDraft(Object.assign({}, row.value || {}))
+            const normalized = Object.assign({}, row.value || {})
+            for (const field of FIELDS) {
+              if (field.kind === 'list' && Array.isArray(normalized[field.key])) {
+                normalized[field.key] = normalized[field.key].join(', ')
+              }
+            }
+            setDraft(normalized)
             setRevision(row.revision)
             setState({ phase: 'ready' })
           } catch (error) {
@@ -206,7 +214,9 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
             const row = list.find((item) => item && item.ns === NS)
             const next = {}
             for (const field of FIELDS) {
-              if (Object.prototype.hasOwnProperty.call(draft, field.key)) next[field.key] = draft[field.key]
+              if (!Object.prototype.hasOwnProperty.call(draft, field.key)) continue
+              // 数组字段在表单里是逗号分隔字符串，保存时再解析
+              next[field.key] = field.kind === 'list' ? toList(draft[field.key]) : draft[field.key]
             }
             await unwrap(await remote.settings.update(NS, next, row ? row.revision : revision))
             setMessage({ ok: true, text: '已保存（写入 profile 的 cordis.patch.yml，插件会热重载）' })

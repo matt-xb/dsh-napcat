@@ -3,7 +3,7 @@ import type Z from '@deepseek-ai/schemastery';
 export interface Config {
     /** forward = 本插件主动连 NapCat 的 ws；reverse = 本插件监听、NapCat 拨进来。 */
     mode: 'forward' | 'reverse';
-    /** forward 模式：NapCat 的 WebSocket 地址（如 ws://81.70.163.182:3001）。 */
+    /** forward 模式：NapCat 的 WebSocket 地址（如 ws://<napcat-host>:3001）。 */
     url: string;
     /** OneBot access_token：forward 时作为 Authorization 发出，reverse 时校验来者。 */
     accessToken: string;

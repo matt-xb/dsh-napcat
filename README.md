@@ -75,7 +75,7 @@ Web UI 设置页里改（推荐），或者给 profile 的 `cordis.patch.yml` �
     name: 'dsh-napcat'
     config:
       mode: forward
-      url: 'ws://81.70.163.182:3001'
+      url: 'ws://<napcat-host>:3001'
       accessToken: '你的 token'
       adminUsers: ['你的QQ号']
       groupPolicy: allowlist

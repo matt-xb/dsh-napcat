@@ -14,6 +14,6 @@
     # config 覆盖示例（NapCat 在云服务器、插件正向拨过去）：
     # config:
     #   mode: forward
-    #   url: 'ws://81.70.163.182:3001'
+    #   url: 'ws://<napcat-host>:3001'
     #   accessToken: '与 NapCat 里配置的一致'
     #   adminUsers: ['你的QQ号']

@@ -6,7 +6,7 @@ import z from '@deepseek-ai/schemastery'
 export interface Config {
   /** forward = 本插件主动连 NapCat 的 ws；reverse = 本插件监听、NapCat 拨进来。 */
   mode: 'forward' | 'reverse'
-  /** forward 模式：NapCat 的 WebSocket 地址（如 ws://81.70.163.182:3001）。 */
+  /** forward 模式：NapCat 的 WebSocket 地址（如 ws://<napcat-host>:3001）。 */
   url: string
   /** OneBot access_token：forward 时作为 Authorization 发出，reverse 时校验来者。 */
   accessToken: string
@@ -52,7 +52,7 @@ export const Config: Z<Config> = z.object({
   mode: z.union([z.const('forward'), z.const('reverse')]).default('forward')
     .description('连接方式：forward=本插件连 NapCat（NapCat 在别的机器上时用这个）；reverse=本插件监听、NapCat 拨进来').volatile(),
   url: z.string().default('')
-    .description('forward 模式：NapCat 的 WebSocket 地址（如 ws://81.70.163.182:3001）；留空=不连接（去设置页填）').volatile(),
+    .description('forward 模式：NapCat 的 WebSocket 地址（如 ws://<napcat-host>:3001）；留空=不连接（去设置页填）').volatile(),
   accessToken: z.string().role('secret').default('')
     .description('OneBot access_token；forward 作为 Bearer 发出，reverse 校验来者（reverse 下留空=不校验，不推荐）').volatile(),
   host: z.string().default('127.0.0.1')
