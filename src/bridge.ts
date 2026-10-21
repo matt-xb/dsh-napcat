@@ -222,6 +222,19 @@ export class Bridge {
       handle = await agents.resume({ resumeSessionId: sessionId, agentOptions })
     }
 
+    // 照 dsh-onebot：create/resume 后必须等 agent 就绪（whenIdle）再投递消息，
+    // 否则 followup 落不到正在初始化的 agent 上，表现为"消息进去了但这一轮不跑"
+    try {
+      await handle.agent.whenIdle()
+    } catch (error) {
+      try {
+        await handle.dispose()
+      } catch {
+        // 以 whenIdle 的错误为准
+      }
+      throw error
+    }
+
     const state: ChatState = {
       ref,
       agent: handle.agent,
@@ -312,7 +325,7 @@ export class Bridge {
         content: [{ type: 'text', text }],
         source: { kind: 'plugin:dsh-napcat' },
       }))
-      this.opts.log('debug', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
+      this.opts.log('info', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
     } catch (error) {
       this.opts.log('warn', '投递失败: ' + describe(error))
       void this.recoverChat(chat, error)
