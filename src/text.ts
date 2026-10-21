@@ -151,3 +151,21 @@ export function shortHash(text: string): string {
   }
   return hash.toString(36)
 }
+/**
+ * 解析「群/人性格」配置：每行 `<group:群号|private:QQ>=<人设文本>`，
+ * 支持 `#` 注释与空行。返回 key → 文本（key 形如 `group:123`）。
+ */
+export function parsePersonaOverrides(raw: string): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed === '' || trimmed.startsWith('#')) continue
+    const at = trimmed.indexOf('=')
+    if (at <= 0) continue
+    const key = trimmed.slice(0, at).trim()
+    const text = trimmed.slice(at + 1).trim()
+    if (!/^(group|private)[:：].+/.test(key) || text === '') continue
+    map.set(key.replace('：', ':'), text)
+  }
+  return map
+}

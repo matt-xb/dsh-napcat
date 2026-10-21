@@ -21,7 +21,7 @@ export { Config }
 
 export const name = 'dsh-napcat'
 /** tools = 注册工具；agents = 按 QQ 会话创建/恢复 agent；workspaceRegistry = 把会话挂进工作区。 */
-export const inject = ['tools', 'agents', 'workspaceRegistry']
+export const inject = ['tools', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt']
 
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2 }
 
@@ -69,6 +69,19 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
 
   registerTools(ctx, conn, log)
 
+  // 群/人性格：照 dsh-im 的动态提示词上下文（按 sessionId 注入额外人设）
+  ctx.inject(['systemPrompt'], promptCtx => {
+      const sp = (promptCtx as unknown as {
+        systemPrompt?: { context?(options: { name: string; order: number; text: (assembly: unknown) => string }): () => void }
+      }).systemPrompt
+      if (sp?.context === undefined) return
+      return sp.context({
+        name: 'dsh-napcat:persona',
+        order: 100,
+        text: assembly => bridge.personaText(assembly as { agent?: { session?: { id?: unknown } } } | undefined),
+      })
+  })
+
   // volatile 配置是"活值"：设置页保存不会重挂载插件，这里自己重建连接。
   const subscribeSettings = (ctx as unknown as {
     on(name: string, listener: (ns: string) => void): () => void
@@ -80,6 +93,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
       if (JSON.stringify(next) === JSON.stringify(config)) return
       Object.assign(config, next)
       log('info', '配置已更新（设置页保存），重建 NapCat 连接')
+      bridge.refreshPersonas()
       conn.reconfigure({
         mode: next.mode,
         url: next.url,

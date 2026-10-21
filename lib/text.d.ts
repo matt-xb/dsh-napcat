@@ -23,3 +23,8 @@ export declare function stripKeyword(text: string, keyword: string): string;
 export declare function repliesToAny(message: ObMessage | undefined, ids: readonly string[]): boolean;
 /** 稳定的短哈希（djb2 → base36），用于把 cwd 编进会话 id。 */
 export declare function shortHash(text: string): string;
+/**
+ * 解析「群/人性格」配置：每行 `<group:群号|private:QQ>=<人设文本>`，
+ * 支持 `#` 注释与空行。返回 key → 文本（key 形如 `group:123`）。
+ */
+export declare function parsePersonaOverrides(raw: string): Map<string, string>;

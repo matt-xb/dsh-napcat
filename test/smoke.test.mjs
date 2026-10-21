@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { findKeyword, mentions, parseCq, shortHash, splitText, stripKeyword, toText } from '../lib/text.js'
+import { findKeyword, mentions, parseCq, parsePersonaOverrides, shortHash, splitText, stripKeyword, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
 const config = {
@@ -94,4 +94,23 @@ test('shortHash 稳定且区分不同路径', () => {
   assert.equal(a, b)
   assert.notEqual(a, c)
   assert.match(a, /^[0-9a-z]{1,7}$/)
+})
+test('parsePersonaOverrides 解析群/人性格', () => {
+  const map = parsePersonaOverrides([
+    '# 注释行',
+    'group:123456=你是群宠小灯，语气活泼',
+    'private:10001 = 私人助理，正式一点',
+    '',
+    '  乱写一行没有等号',
+    'group:999=',
+  ].join('\n'))
+  assert.equal(map.get('group:123456'), '你是群宠小灯，语气活泼')
+  assert.equal(map.get('private:10001'), '私人助理，正式一点')
+  assert.equal(map.has('group:999'), false)   // 空文本丢弃
+  assert.equal(map.size, 2)
+})
+
+test('parsePersonaOverrides 空输入返回空表', () => {
+  assert.equal(parsePersonaOverrides('').size, 0)
+  assert.equal(parsePersonaOverrides('group:1=x\nprivate:2=y').size, 2)
 })

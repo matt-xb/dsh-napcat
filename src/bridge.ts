@@ -22,7 +22,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { findKeyword, mentions, repliesTo, repliesToAny, shortHash, splitText, toText } from './text.js'
+import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, shortHash, splitText, toText } from './text.js'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
 /** 宿主注入的服务（inject 保证就绪）。 */
@@ -67,11 +67,16 @@ export class Bridge {
   private readonly bySession = new Map<string, string>()
   /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
   private readonly sessionSuffixes = new Map<string, string>()
+  /** sessionId → 该会话的人设文本（来自 personaOverrides）。 */
+  private readonly personaBySession = new Map<string, string>()
+  /** 解析后的人设表（chat key → 文本）。 */
+  private personas = parsePersonaOverrides('')
   private sessionEventOff: (() => void) | undefined
   private stopped = false
   private mentionWarned = false
 
-  constructor(private readonly opts: BridgeOptions) {}
+  constructor(private readonly opts: BridgeOptions) {
+    this.refreshPersonas()}
 
   start(): void {
     this.stopped = false
@@ -187,7 +192,29 @@ export class Bridge {
 
     let handle: { agent: Agent; dispose(): Promise<void> }
     let created = true
-    try {
+    // 照 dsh-onebot：先用 sessionPersistence.stat 探测是否已有持久化日志，避免 create 抛错
+    let exists = false
+    const persistence = (this.opts.ctx as unknown as {
+      sessionPersistence?: { stat?(id: unknown): Promise<object | undefined> }
+    }).sessionPersistence
+    if (persistence?.stat !== undefined) {
+      try {
+        exists = (await persistence.stat(sessionId)) !== undefined
+      } catch {
+        exists = false
+      }
+    }
+    if (exists) {
+      try {
+        created = false
+        handle = await agents.resume({ resumeSessionId: sessionId, agentOptions })
+      } catch (error) {
+        this.opts.log('warn', '预检到日志但 resume 失败，改 create: ' + describe(error))
+        created = true
+        exists = false
+        handle = await agents.create({ sessionId, meta, agentOptions })
+      }
+    } else try {
       handle = await agents.create({ sessionId, meta, agentOptions })
     } catch (error) {
       this.opts.log('warn', '创建会话失败（多半是同 id 已有持久化日志），改用 resume: ' + describe(error))
@@ -209,44 +236,54 @@ export class Bridge {
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
     // 侧边栏工作区需要显式挂载会话（否则显示未分组）
-    await this.attachToWorkspace(handle.agent.session.id)
+    await this.attachToWorkspace(cwd, workspaceTitle(ref), handle.agent.session.id)
     this.opts.log('info', '会话就绪: ' + ref.key + ' → ' + String(handle.agent.session.id) + ' (cwd=' + cwd + ')')
     return state
   }
 
   /**
-   * 把会话挂进工作区（dsh-onebot 同款做法）：
-   *   workspaceRegistry.resolveByPath(根目录) ?? create(根目录, 标题) → workspace.attachSession(sessionId)
-   * 根目录固定为 `<workspacePath>/napcat`，所有 QQ 会话都挂到这一个工作区下。
+   * 把会话挂进工作区：宿主要求 **工作区路径必须等于会话 cwd**，所以每个聊天目录本身就是
+   * 一个工作区（一群一格 / 一人一格）。照 dsh-onebot：resolveByPath → create(path,title) → attachSession。
    */
-  private async attachToWorkspace(sessionId: unknown): Promise<void> {
-    const base = this.opts.config.workspacePath.trim()
-    if (base === '') return
-    const root = join(base, 'napcat')
+  /** 重新解析 personaOverrides（配置热更新时调用）。 */
+  refreshPersonas(): void {
+    this.personas = parsePersonaOverrides(this.opts.config.personaOverrides)
+    for (const [sessionId, chatKey] of this.bySession) {
+      const text = this.personas.get(chatKey)
+      if (text === undefined || text === '') this.personaBySession.delete(sessionId)
+      else this.personaBySession.set(sessionId, text)
+    }
+  }
+
+  /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 找该会话的人设。 */
+  personaText(assembly: { agent?: { session?: { id?: unknown } } } | undefined): string {
+    const id = assembly?.agent?.session?.id
+    if (id === undefined) return ''
+    return this.personaBySession.get(String(id)) ?? ''
+  }
+  private async attachToWorkspace(cwd: string, title: string, sessionId: unknown): Promise<void> {
     try {
-      await mkdir(root, { recursive: true })
       const registry = (this.opts.ctx as unknown as {
         workspaceRegistry?: {
           resolveByPath?(path: string): Promise<{ path?: string; attachSession?(id: string): Promise<void> } | undefined>
           create?(path: string, title?: string): Promise<{ path?: string; attachSession?(id: string): Promise<void> }>
-          list?(): { path?: string }[]
         }
       }).workspaceRegistry
       if (registry === undefined) {
         this.opts.log('warn', '宿主没有 workspaceRegistry 服务（无法挂工作区）')
         return
       }
-      let workspace = await registry.resolveByPath?.(root)
+      let workspace = await registry.resolveByPath?.(cwd)
       if (workspace === undefined && registry.create !== undefined) {
-        workspace = await registry.create(root, 'napcat')
-        this.opts.log('info', '已创建并挂载工作区: ' + root)
+        workspace = await registry.create(cwd, title)
+        this.opts.log('info', '已创建分组（工作区）: ' + title + ' → ' + cwd)
       }
       if (workspace?.attachSession === undefined) {
-        this.opts.log('warn', '工作区对象不可挂载: ' + root + ' | 已有=' + JSON.stringify((registry.list?.() ?? []).map(w => w.path)))
+        this.opts.log('warn', '工作区对象不可挂载: ' + cwd)
         return
       }
       await workspace.attachSession(String(sessionId))
-      this.opts.log('info', '会话已挂到工作区: ' + String(workspace.path ?? root))
+      this.opts.log('info', '会话已挂到分组: ' + String(workspace.path ?? cwd))
     } catch (error) {
       this.opts.log('warn', '挂工作区失败: ' + describe(error))
     }
@@ -422,4 +459,9 @@ function normalizePath(input: string): string {
   let value = input.trim().replace(/\//g, '\\')
   while (value.length > 1 && value.endsWith('\\')) value = value.slice(0, -1)
   return process.platform === 'win32' ? value.toLowerCase() : value
+}
+/** 工作区/分组标题：群 → 群 <号>；私聊 → 私聊 <QQ>。 */
+function workspaceTitle(ref: ChatRef): string {
+  const id = ref.key.replace(/^[a-z]+[:：]/, '')
+  return ref.kind === 'group' ? '群 ' + id : '私聊 ' + id
 }

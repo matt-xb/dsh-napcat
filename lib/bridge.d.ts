@@ -23,6 +23,10 @@ export declare class Bridge {
     private readonly bySession;
     /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
     private readonly sessionSuffixes;
+    /** sessionId → 该会话的人设文本（来自 personaOverrides）。 */
+    private readonly personaBySession;
+    /** 解析后的人设表（chat key → 文本）。 */
+    private personas;
     private sessionEventOff;
     private stopped;
     private mentionWarned;
@@ -33,10 +37,19 @@ export declare class Bridge {
     handleEvent(event: ObEvent): Promise<void>;
     private ensureChat;
     /**
-     * 把会话挂进工作区（dsh-onebot 同款做法）：
-     *   workspaceRegistry.resolveByPath(根目录) ?? create(根目录, 标题) → workspace.attachSession(sessionId)
-     * 根目录固定为 `<workspacePath>/napcat`，所有 QQ 会话都挂到这一个工作区下。
+     * 把会话挂进工作区：宿主要求 **工作区路径必须等于会话 cwd**，所以每个聊天目录本身就是
+     * 一个工作区（一群一格 / 一人一格）。照 dsh-onebot：resolveByPath → create(path,title) → attachSession。
      */
+    /** 重新解析 personaOverrides（配置热更新时调用）。 */
+    refreshPersonas(): void;
+    /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 找该会话的人设。 */
+    personaText(assembly: {
+        agent?: {
+            session?: {
+                id?: unknown;
+            };
+        };
+    } | undefined): string;
     private attachToWorkspace;
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
     private cwdFor;

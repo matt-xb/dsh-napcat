@@ -42,6 +42,8 @@ export interface Config {
   workspacePath: string
   /** 每个 QQ 会话是否用 workspacePath 下的独立子目录。 */
   perChatWorkspace: boolean
+  /** 群/人性格：每行 group:<群号>=<人设> 或 private:<QQ>=<人设>。 */
+  personaOverrides: string
   /** 会话挂载的 agent preset（留空=宿主默认）。 */
   agentPreset: string
   /** 覆盖模型 provider（留空=宿主默认）。 */
@@ -87,6 +89,8 @@ export const Config: Z<Config> = z.object({
     .description('单条 QQ 消息最大字数，超出自动分段；0=不分段').volatile(),
   reconnectMaxAttempts: z.number().default(0)
     .description('forward 模式连续失败多少次后放弃重连（0=无限重试，退避封顶 60s；日志会限流）').volatile(),
+  personaOverrides: z.string().default('')
+    .description('群/人性格：每行 group:<群号>=<人设> 或 private:<QQ>=<人设>（空=不额外注入）').volatile(),
   perChatWorkspace: z.boolean().default(true)
     .description('每个 QQ 会话用 workspacePath/napcat/<群号或QQ> 作为独立工作目录（便于按工作区归拢、文件隔离）').volatile(),
   workspacePath: z.string().default('')
@@ -122,6 +126,7 @@ export const DEFAULTS: Config = {
   reconnectMaxAttempts: 0,
   workspacePath: '',
   perChatWorkspace: true,
+  personaOverrides: '',
   agentPreset: '',
   provider: '',
   model: '',

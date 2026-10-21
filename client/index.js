@@ -49,6 +49,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'reconnectMaxAttempts', label: '重连上限（0=无限）', kind: 'number' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },
   { key: 'perChatWorkspace', label: '每个会话用独立子目录（workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },
+  { key: 'personaOverrides', label: '群/人性格（每行 group:<群号>=<人设> 或 private:<QQ>=<人设>）', kind: 'textarea', placeholder: 'group:123456=你是群宠小灯，语气活泼\nprivate:10001=你是我的私人助理，正式一点' },
         { key: 'agentPreset', label: 'Agent 预设（留空=宿主默认）', kind: 'text' },
         { key: 'provider', label: '模型 provider（留空=宿主默认）', kind: 'text' },
         { key: 'model', label: '模型 id（留空=宿主默认）', kind: 'text' },
@@ -137,6 +138,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           control = react.createElement('input', {
             id, type: 'number', style: style.input, value: value == null ? '' : String(value),
             onChange: (event) => onChange(field.key, event.target.value === '' ? undefined : Number(event.target.value)),
+          })
+        } else if (field.kind === 'textarea') {
+          control = react.createElement('textarea', {
+            id, style: Object.assign({}, style.input, { minHeight: '96px', fontFamily: 'inherit' }),
+            placeholder: field.placeholder, value: value == null ? '' : String(value),
+            onChange: (event) => onChange(field.key, event.target.value),
           })
         } else if (field.kind === 'list') {
           // value 这里就是原始文本（不是数组）：输入过程中逗号/空格原样保留，

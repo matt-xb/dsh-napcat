@@ -39,6 +39,8 @@ export interface Config {
     workspacePath: string;
     /** 每个 QQ 会话是否用 workspacePath 下的独立子目录。 */
     perChatWorkspace: boolean;
+    /** 群/人性格：每行 group:<群号>=<人设> 或 private:<QQ>=<人设>。 */
+    personaOverrides: string;
     /** 会话挂载的 agent preset（留空=宿主默认）。 */
     agentPreset: string;
     /** 覆盖模型 provider（留空=宿主默认）。 */
