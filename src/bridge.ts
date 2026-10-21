@@ -28,6 +28,9 @@ import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 /** 宿主注入的服务（inject 保证就绪）。 */
 type HostContext = Context & { agents: AgentRegistry }
 
+/** 投递后多久没收到 turn/start 就判定会话失效。 */
+const WATCHDOG_MS = 10000
+
 interface ChatState {
   ref: ChatRef
   agent: Agent
@@ -38,6 +41,12 @@ interface ChatState {
   lastReplyId: string
   /** 机器人最近发出的消息 id（用于判定「回复机器人」，最多 30 条） */
   recentReplyIds?: string[]
+  /** 本轮是否已经收到 turn/start（看门狗判定用）。 */
+  turnStarted?: boolean
+  /** 投递后的看门狗定时器。 */
+  startTimer?: ReturnType<typeof setTimeout>
+  /** 这条消息是否已经重试过一次。 */
+  retried?: boolean
 }
 
 export interface BridgeOptions {
@@ -178,6 +187,8 @@ export class Bridge {
       buffer: [],
       lastReplyId: '',
       recentReplyIds: [],
+      turnStarted: false,
+      retried: false,
     }
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
@@ -221,6 +232,36 @@ export class Bridge {
         this.opts.log('warn', '投递被拒: ' + describe(error))
         void this.recoverChat(chat, error)
       })
+    }
+    this.armWatchdog(chat, text)
+  }
+
+  /** 10s 内没等到 turn/start 就认为会话已失效（典型：会话被归档），换新会话重投一次。 */
+  private armWatchdog(chat: ChatState, text: string): void {
+    if (chat.startTimer !== undefined) clearTimeout(chat.startTimer)
+    chat.turnStarted = false
+    chat.startTimer = setTimeout(() => {
+      chat.startTimer = undefined
+      if (chat.turnStarted || this.stopped) return
+      this.opts.log('warn', '会话没有开始执行（可能已归档或失效），换新会话重投: ' + chat.ref.key)
+      void this.recoverAndRetry(chat, text)
+    }, WATCHDOG_MS)
+  }
+
+  /** 会话失效后：重建会话并把这条消息再投一次（每条消息只重试一次）。 */
+  private async recoverAndRetry(chat: ChatState, text: string): Promise<void> {
+    const ref = chat.ref
+    if (chat.retried === true) {
+      await this.sendText(chat, '⚠️ 会话没有响应，已换新会话仍失败，请稍后再试')
+      return
+    }
+    await this.recoverChat(chat, new Error('会话没有开始执行'))
+    try {
+      const fresh = await this.ensureChat(ref)
+      fresh.retried = true
+      this.dispatch(fresh, text)
+    } catch (error) {
+      this.opts.log('warn', '重建会话失败: ' + describe(error))
     }
   }
 
