@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { mentions, parseCq, splitText, toText } from '../lib/text.js'
+import { findKeyword, mentions, parseCq, splitText, stripKeyword, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
 const config = {
@@ -73,4 +73,17 @@ test('session id 稳定且合法', () => {
   assert.equal(sessionIdForChat('private:123'), 'napcat-private-123')
   assert.equal(sessionIdForChat('group:789'), 'napcat-group-789')
   assert.match(sessionIdForChat('group:a b/c'), /^[A-Za-z0-9_-]+$/)
+})
+test('findKeyword 命中/大小写/空表', () => {
+  assert.equal(findKeyword('你好 小助手 在吗', ['小助手']), '小助手')
+  assert.equal(findKeyword('HELLO Bot', ['bot']), 'bot')
+  assert.equal(findKeyword('随便说说', ['小助手']), undefined)
+  assert.equal(findKeyword('任何内容', []), undefined)
+  assert.equal(findKeyword('空词表里有空白', ['   ']), undefined)
+})
+
+test('stripKeyword 去掉第一个命中且 trim', () => {
+  assert.equal(stripKeyword('小助手 帮我查天气', '小助手'), '帮我查天气')
+  assert.equal(stripKeyword('帮我查天气 小助手', '小助手'), '帮我查天气')
+  assert.equal(stripKeyword('没有关键字', '小助手'), '没有关键字')
 })

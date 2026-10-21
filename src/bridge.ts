@@ -8,8 +8,13 @@
  * 重启后 create 失败即回退 resume，于是同一 QQ 会话自动续上上下文。
  */
 
+import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
+
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
+/** 宿主 AgentRegistry.create 接受的模型选项（避免自己猜 ReasoningEffortId 的品牌类型）。 */
+type AgentOptions = NonNullable<NonNullable<Parameters<AgentRegistry['create']>[0]>['agentOptions']>
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId as makeSessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
@@ -17,7 +22,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { mentions, repliesTo, splitText, toText } from './text.js'
+import { findKeyword, mentions, repliesTo, repliesToAny, splitText, toText } from './text.js'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
 /** 宿主注入的服务（inject 保证就绪）。 */
@@ -31,6 +36,8 @@ interface ChatState {
   buffer: string[]
   /** 最近一条触发了回复的消息 id（replyAsQuote 与"回复机器人也算提及"用）。 */
   lastReplyId: string
+  /** 机器人最近发出的消息 id（用于判定「回复机器人」，最多 30 条） */
+  recentReplyIds?: string[]
 }
 
 export interface BridgeOptions {
@@ -92,6 +99,9 @@ export class Bridge {
       return
     }
 
+    const rawText = toText(msg.message, selfId)
+    const keyword = findKeyword(rawText, this.opts.config.triggerKeywords)
+
     if (ref.kind === 'group' && this.opts.config.requireMention) {
       if (selfId === '') {
         if (!this.mentionWarned) {
@@ -99,23 +109,27 @@ export class Bridge {
           this.opts.log('warn', '还不知道机器人自己的 QQ（botQQ 留空且事件里没带 self_id），暂不启用 @ 门控')
         }
       } else {
-        const botLastReply = this.chats.get(ref.key)?.lastReplyId ?? ''
-        const hit = mentions(msg.message, selfId) || repliesTo(msg.message, botLastReply)
+        const recent = this.chats.get(ref.key)?.recentReplyIds ?? []
+        const hit = mentions(msg.message, selfId) || repliesToAny(msg.message, recent) || keyword !== undefined
         if (!hit) {
-          this.opts.log('debug', '群消息未 @ 机器人，跳过: ' + ref.key)
+          this.opts.log('debug', '群消息未 @ 机器人且没命中关键字，跳过: ' + ref.key)
           return
         }
       }
     }
 
-    const text = toText(msg.message, selfId)
+    const text = rawText
     if (text.trim() === '') {
       this.opts.log('debug', '空文本消息，跳过: ' + ref.key)
       return
     }
 
     const chat = await this.ensureChat(ref)
-    chat.lastReplyId = String(msg.message_id ?? '')
+    const sentId = String(msg.message_id ?? '')
+    chat.lastReplyId = sentId
+    if (sentId !== '') {
+      chat.recentReplyIds = [...(chat.recentReplyIds ?? []), sentId].slice(-30)
+    }
     this.dispatch(chat, text)
   }
 
@@ -127,11 +141,24 @@ export class Bridge {
 
     const agents = (this.opts.ctx as HostContext).agents
     const sessionId = makeSessionId(sessionIdForChat(ref.key))
-    const meta: { cwd: string; agentPreset?: string } = { cwd: this.cwd() }
+    const meta: { cwd: string; agentPreset?: string } = { cwd: await this.cwdFor(ref) }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
-    const agentOptions: { provider?: string; model?: string } = {}
+    const agentOptions: AgentOptions = {}
     if (this.opts.config.provider !== '') agentOptions.provider = this.opts.config.provider
     if (this.opts.config.model !== '') agentOptions.model = this.opts.config.model
+    // 没显式配置模型时用宿主的默认模型（否则 agent 的 {{model}} 为空，整轮会报错）
+    if (agentOptions.provider === undefined || agentOptions.model === undefined) {
+      const fallback = (this.opts.ctx as unknown as {
+        get?(name: string): { currentSelection?(): { provider?: string; model?: string; reasoningEffort?: string } } | undefined
+      }).get?.('agentDefaultModel')
+      const selection = fallback?.currentSelection?.()
+      if (agentOptions.provider === undefined && selection?.provider !== undefined) agentOptions.provider = selection.provider
+      if (agentOptions.model === undefined && selection?.model !== undefined) agentOptions.model = selection.model
+      if (agentOptions.reasoningEffort === undefined && selection?.reasoningEffort !== undefined) agentOptions.reasoningEffort = selection.reasoningEffort as AgentOptions['reasoningEffort']
+    }
+    if (agentOptions.model === undefined) {
+      this.opts.log('warn', '没有可用的模型：在「设置 → NapCat」里填 provider/model，或先给 DSH 配一个默认模型')
+    }
 
     let handle: { agent: Agent; dispose(): Promise<void> }
     try {
@@ -147,6 +174,7 @@ export class Bridge {
       dispose: () => handle.dispose(),
       buffer: [],
       lastReplyId: '',
+      recentReplyIds: [],
     }
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
@@ -154,9 +182,20 @@ export class Bridge {
     return state
   }
 
-  private cwd(): string {
-    const configured = this.opts.config.workspacePath.trim()
-    return configured === '' ? process.cwd() : configured
+  /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
+  private async cwdFor(ref: ChatRef): Promise<string> {
+    const base = this.opts.config.workspacePath.trim()
+    if (base === '') return process.cwd()
+    if (!this.opts.config.perChatWorkspace) return base
+    const safe = ref.key.replace(/[^A-Za-z0-9._-]+/g, '-')
+    const dir = join(base, 'napcat', safe)
+    try {
+      await mkdir(dir, { recursive: true })
+    } catch (error) {
+      this.opts.log('warn', '创建会话目录失败，退回工作区根目录: ' + describe(error))
+      return base
+    }
+    return dir
   }
 
   private dispatch(chat: ChatState, text: string): void {

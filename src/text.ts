@@ -119,3 +119,27 @@ export function splitText(text: string, maxChars: number): string[] {
   if (rest !== '') chunks.push(rest)
   return chunks.filter(chunk => chunk !== '')
 }
+/** 在文本里找第一个命中的触发关键字（大小写不敏感，空词忽略）。 */
+export function findKeyword(text: string, words: readonly string[]): string | undefined {
+  if (words.length === 0) return undefined
+  const lowered = text.toLowerCase()
+  for (const word of words) {
+    const needle = String(word ?? '').trim()
+    if (needle === '') continue
+    if (lowered.includes(needle.toLowerCase())) return needle
+  }
+  return undefined
+}
+
+/** 去掉命中的触发关键字（大小写不敏感，只去掉第一个）。 */
+export function stripKeyword(text: string, keyword: string): string {
+  const index = text.toLowerCase().indexOf(keyword.toLowerCase())
+  if (index < 0) return text
+  return (text.slice(0, index) + text.slice(index + keyword.length)).trim()
+}
+/** 消息是否引用了这批消息 id 中的任意一条。 */
+export function repliesToAny(message: ObMessage | undefined, ids: readonly string[]): boolean {
+  if (ids.length === 0) return false
+  const wanted = new Set(ids)
+  return segmentsOf(message).some(seg => seg.type === 'reply' && wanted.has(String(seg.data?.id ?? '')))
+}

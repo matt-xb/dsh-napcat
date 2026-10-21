@@ -15,3 +15,9 @@ export declare function repliesTo(message: ObMessage | undefined, messageId: str
  * 返回的每段都不超过 maxChars（maxChars <= 0 时原样返回一段）。
  */
 export declare function splitText(text: string, maxChars: number): string[];
+/** 在文本里找第一个命中的触发关键字（大小写不敏感，空词忽略）。 */
+export declare function findKeyword(text: string, words: readonly string[]): string | undefined;
+/** 去掉命中的触发关键字（大小写不敏感，只去掉第一个）。 */
+export declare function stripKeyword(text: string, keyword: string): string;
+/** 消息是否引用了这批消息 id 中的任意一条。 */
+export declare function repliesToAny(message: ObMessage | undefined, ids: readonly string[]): boolean;

@@ -25,6 +25,8 @@ export interface Config {
     groupAllowFrom: string[];
     /** 群聊是否必须 @机器人才响应。 */
     requireMention: boolean;
+    /** 群聊里没 @ 但消息包含这些关键字也响应（空=只认 @ 与回复）。 */
+    triggerKeywords: string[];
     /** 忽略机器人自己发出的消息（防自循环）。 */
     ignoreSelf: boolean;
     /** 回复时引用原消息（QQ 里表现为"回复"气泡）。 */
@@ -35,6 +37,8 @@ export interface Config {
     reconnectMaxAttempts: number;
     /** QQ 会话挂载的工作区；留空=宿主进程 cwd。 */
     workspacePath: string;
+    /** 每个 QQ 会话是否用 workspacePath 下的独立子目录。 */
+    perChatWorkspace: boolean;
     /** 会话挂载的 agent preset（留空=宿主默认）。 */
     agentPreset: string;
     /** 覆盖模型 provider（留空=宿主默认）。 */

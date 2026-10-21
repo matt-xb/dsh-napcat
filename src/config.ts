@@ -28,6 +28,8 @@ export interface Config {
   groupAllowFrom: string[]
   /** 群聊是否必须 @机器人才响应。 */
   requireMention: boolean
+  /** 群聊里没 @ 但消息包含这些关键字也响应（空=只认 @ 与回复）。 */
+  triggerKeywords: string[]
   /** 忽略机器人自己发出的消息（防自循环）。 */
   ignoreSelf: boolean
   /** 回复时引用原消息（QQ 里表现为"回复"气泡）。 */
@@ -38,6 +40,8 @@ export interface Config {
   reconnectMaxAttempts: number
   /** QQ 会话挂载的工作区；留空=宿主进程 cwd。 */
   workspacePath: string
+  /** 每个 QQ 会话是否用 workspacePath 下的独立子目录。 */
+  perChatWorkspace: boolean
   /** 会话挂载的 agent preset（留空=宿主默认）。 */
   agentPreset: string
   /** 覆盖模型 provider（留空=宿主默认）。 */
@@ -71,6 +75,8 @@ export const Config: Z<Config> = z.object({
     .description('群聊策略：open=任何群；allowlist=只允许下面的群；disabled=关闭').volatile(),
   groupAllowFrom: z.array(z.string()).default([])
     .description('允许的群号列表').volatile(),
+  triggerKeywords: z.array(z.string()).default([])
+    .description('群聊关键字触发：消息里出现任一词就响应（不要求 @；留空=只认 @）').volatile(),
   requireMention: z.boolean().default(true)
     .description('群聊必须 @机器人 才响应（关掉=任何群消息都进模型，容易刷屏）').volatile(),
   ignoreSelf: z.boolean().default(true)
@@ -81,6 +87,8 @@ export const Config: Z<Config> = z.object({
     .description('单条 QQ 消息最大字数，超出自动分段；0=不分段').volatile(),
   reconnectMaxAttempts: z.number().default(0)
     .description('forward 模式连续失败多少次后放弃重连（0=无限重试，退避封顶 60s；日志会限流）').volatile(),
+  perChatWorkspace: z.boolean().default(true)
+    .description('每个 QQ 会话用 workspacePath/napcat/<群号或QQ> 作为独立工作目录（便于按工作区归拢、文件隔离）').volatile(),
   workspacePath: z.string().default('')
     .description('QQ 会话挂载的工作区路径；留空=宿主进程 cwd').volatile(),
   agentPreset: z.string().default('')
@@ -107,11 +115,13 @@ export const DEFAULTS: Config = {
   groupPolicy: 'allowlist',
   groupAllowFrom: [],
   requireMention: true,
+  triggerKeywords: [],
   ignoreSelf: true,
   replyAsQuote: false,
   splitMaxChars: 1200,
   reconnectMaxAttempts: 0,
   workspacePath: '',
+  perChatWorkspace: true,
   agentPreset: '',
   provider: '',
   model: '',
