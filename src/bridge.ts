@@ -22,7 +22,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { findKeyword, mentions, repliesTo, repliesToAny, splitText, toText } from './text.js'
+import { findKeyword, mentions, repliesTo, repliesToAny, shortHash, splitText, toText } from './text.js'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
 /** 宿主注入的服务（inject 保证就绪）。 */
@@ -157,9 +157,15 @@ export class Bridge {
     if (existing !== undefined) return existing
 
     const agents = (this.opts.ctx as HostContext).agents
-    const suffix = this.sessionSuffixes.get(ref.key)
-    const sessionId = makeSessionId(suffix === undefined ? sessionIdForChat(ref.key) : sessionIdForChat(ref.key) + '-' + suffix)
     const cwd = await this.cwdFor(ref)
+    const suffix = this.sessionSuffixes.get(ref.key)
+    // 把 cwd 编进会话 id：改过 workspacePath/开关后自然换新会话，不会 resume 到旧 cwd 的半死会话
+    const cwdTag = this.opts.config.perChatWorkspace && this.opts.config.workspacePath.trim() !== ''
+      ? '-w' + shortHash(cwd)
+      : ''
+    const sessionId = makeSessionId(
+      sessionIdForChat(ref.key) + cwdTag + (suffix === undefined ? '' : '-' + suffix),
+    )
     const meta: { cwd: string; agentPreset?: string } = { cwd }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
     const agentOptions: AgentOptions = {}
@@ -204,7 +210,7 @@ export class Bridge {
     this.bySession.set(String(handle.agent.session.id), ref.key)
     // 侧边栏工作区需要显式挂载会话（否则显示未分组）
     await this.attachToWorkspace(cwd, handle.agent.session.id)
-    this.opts.log('info', '会话就绪: ' + ref.key + ' → ' + String(handle.agent.session.id))
+    this.opts.log('info', '会话就绪: ' + ref.key + ' → ' + String(handle.agent.session.id) + ' (cwd=' + cwd + ')')
     return state
   }
 

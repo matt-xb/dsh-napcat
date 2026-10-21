@@ -143,3 +143,11 @@ export function repliesToAny(message: ObMessage | undefined, ids: readonly strin
   const wanted = new Set(ids)
   return segmentsOf(message).some(seg => seg.type === 'reply' && wanted.has(String(seg.data?.id ?? '')))
 }
+/** 稳定的短哈希（djb2 → base36），用于把 cwd 编进会话 id。 */
+export function shortHash(text: string): string {
+  let hash = 5381
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0
+  }
+  return hash.toString(36)
+}

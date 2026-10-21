@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { findKeyword, mentions, parseCq, splitText, stripKeyword, toText } from '../lib/text.js'
+import { findKeyword, mentions, parseCq, shortHash, splitText, stripKeyword, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
 const config = {
@@ -86,4 +86,12 @@ test('stripKeyword 去掉第一个命中且 trim', () => {
   assert.equal(stripKeyword('小助手 帮我查天气', '小助手'), '帮我查天气')
   assert.equal(stripKeyword('帮我查天气 小助手', '小助手'), '帮我查天气')
   assert.equal(stripKeyword('没有关键字', '小助手'), '没有关键字')
+})
+test('shortHash 稳定且区分不同路径', () => {
+  const a = shortHash('E:\\dsnworkspace\\napcat\\group-1')
+  const b = shortHash('E:\\dsnworkspace\\napcat\\group-1')
+  const c = shortHash('C:\\Windows\\System32')
+  assert.equal(a, b)
+  assert.notEqual(a, c)
+  assert.match(a, /^[0-9a-z]{1,7}$/)
 })

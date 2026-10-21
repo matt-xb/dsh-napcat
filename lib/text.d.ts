@@ -21,3 +21,5 @@ export declare function findKeyword(text: string, words: readonly string[]): str
 export declare function stripKeyword(text: string, keyword: string): string;
 /** 消息是否引用了这批消息 id 中的任意一条。 */
 export declare function repliesToAny(message: ObMessage | undefined, ids: readonly string[]): boolean;
+/** 稳定的短哈希（djb2 → base36），用于把 cwd 编进会话 id。 */
+export declare function shortHash(text: string): string;
