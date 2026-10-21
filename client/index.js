@@ -78,9 +78,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         ok: { color: 'var(--dsw-alias-state-success-primary, #389e0d)', fontSize: '12px', margin: 0 },
       }
 
-      /** Remote 调用统一解包：宿主返回 { ok, value } / { ok:false, error }。 */
-      async function callRemote(fn, ...args) {
-        const result = await fn(...args)
+      /** 解包 Remote 结果：{ ok, value } / { ok:false, error }。 */
+      function unwrap(result) {
         if (result !== null && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'ok')) {
           if (result.ok !== true) {
             const code = result.error && result.error.code
@@ -91,6 +90,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         }
         return result
       }
+
+      /** Remote 方法签名（见 typert.remote-client.d.ts）：
+       *  describe() → { writable, hasDocument, namespaces: SettingsNamespaceView[] }
+       *  update(ns, patch, expectedRevision) → SettingsNamespaceView
+       * 两者都返回 { ok, value } 包装。
+       */
 
       /** 取 Remote 门面（客户端服务名 `remote`）。 */
       function remoteOf(ctx) {
@@ -156,6 +161,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         const [draft, setDraft] = react.useState({})
         const [revision, setRevision] = react.useState(undefined)
         const [message, setMessage] = react.useState(undefined)
+          const [writable, setWritable] = react.useState(true)
 
         const load = react.useCallback(async () => {
           const remote = remoteOf(ctx)
@@ -165,9 +171,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           }
           setState({ phase: 'loading' })
           try {
-            const rows = await callRemote(remote.settings.describe, remote.settings)
-            const list = Array.isArray(rows) ? rows : []
-            if (!Array.isArray(rows)) throw new Error('describe 返回的不是数组：' + JSON.stringify(rows).slice(0, 200))
+            const described = unwrap(await remote.settings.describe())
+            const list = described && Array.isArray(described.namespaces) ? described.namespaces : []
+            if (!Array.isArray(described && described.namespaces)) {
+              throw new Error('describe 返回的形状不对：' + JSON.stringify(described).slice(0, 200))
+            }
+            setWritable(described.writable !== false)
             const row = list.find((item) => item && item.ns === NS)
             if (row === undefined) {
               setState({ phase: 'missing' })
@@ -188,15 +197,18 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           if (remote === null) return
           setMessage(undefined)
           try {
-            const rows = await callRemote(remote.settings.describe, remote.settings)
-            const list = Array.isArray(rows) ? rows : []
-            if (!Array.isArray(rows)) throw new Error('describe 返回的不是数组：' + JSON.stringify(rows).slice(0, 200))
+            const described = unwrap(await remote.settings.describe())
+            const list = described && Array.isArray(described.namespaces) ? described.namespaces : []
+            if (!Array.isArray(described && described.namespaces)) {
+              throw new Error('describe 返回的形状不对：' + JSON.stringify(described).slice(0, 200))
+            }
+            setWritable(described.writable !== false)
             const row = list.find((item) => item && item.ns === NS)
             const next = {}
             for (const field of FIELDS) {
               if (Object.prototype.hasOwnProperty.call(draft, field.key)) next[field.key] = draft[field.key]
             }
-            await callRemote(remote.settings.update, remote.settings, NS, next, row ? row.revision : revision)
+            await unwrap(await remote.settings.update(NS, next, row ? row.revision : revision))
             setMessage({ ok: true, text: '已保存（写入 profile 的 cordis.patch.yml，插件会热重载）' })
             await load()
           } catch (error) {
