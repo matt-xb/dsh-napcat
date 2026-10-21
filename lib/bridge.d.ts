@@ -21,6 +21,8 @@ export declare class Bridge {
     private readonly opts;
     private readonly chats;
     private readonly bySession;
+    /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
+    private readonly sessionSuffixes;
     private sessionEventOff;
     private stopped;
     private mentionWarned;
@@ -33,6 +35,8 @@ export declare class Bridge {
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
     private cwdFor;
     private dispatch;
+    /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */
+    private recoverChat;
     private onSessionEvent;
     /** 按 splitMaxChars 分段发送（第一段可带引用）。 */
     private sendText;

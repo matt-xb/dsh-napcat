@@ -50,6 +50,8 @@ export interface BridgeOptions {
 export class Bridge {
   private readonly chats = new Map<string, ChatState>()
   private readonly bySession = new Map<string, string>()
+  /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
+  private readonly sessionSuffixes = new Map<string, string>()
   private sessionEventOff: (() => void) | undefined
   private stopped = false
   private mentionWarned = false
@@ -140,7 +142,8 @@ export class Bridge {
     if (existing !== undefined) return existing
 
     const agents = (this.opts.ctx as HostContext).agents
-    const sessionId = makeSessionId(sessionIdForChat(ref.key))
+    const suffix = this.sessionSuffixes.get(ref.key)
+    const sessionId = makeSessionId(suffix === undefined ? sessionIdForChat(ref.key) : sessionIdForChat(ref.key) + '-' + suffix)
     const meta: { cwd: string; agentPreset?: string } = { cwd: await this.cwdFor(ref) }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
     const agentOptions: AgentOptions = {}
@@ -200,18 +203,42 @@ export class Bridge {
 
   private dispatch(chat: ChatState, text: string): void {
     chat.buffer = []
+    let pending: unknown
     try {
-      chat.agent.followup(createUserMessage({
+      pending = chat.agent.followup(createUserMessage({
         content: [{ type: 'text', text }],
         source: { kind: 'plugin:dsh-napcat' },
       }))
       this.opts.log('debug', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
     } catch (error) {
       this.opts.log('warn', '投递失败: ' + describe(error))
-      void this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error))
+      void this.recoverChat(chat, error)
+      return
+    }
+    // followup 可能是异步的（会话被归档/删除、agent 已释放时会 reject）——必须接住，否则消息静默丢失
+    if (pending !== null && typeof pending === 'object' && typeof (pending as { then?: unknown }).then === 'function') {
+      void (pending as Promise<unknown>).catch((error: unknown) => {
+        this.opts.log('warn', '投递被拒: ' + describe(error))
+        void this.recoverChat(chat, error)
+      })
     }
   }
 
+  /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */
+  private async recoverChat(chat: ChatState, error: unknown): Promise<void> {
+    // 换一个会话 id：否则 create 会撞上归档/失效的旧 id，又 resume 回那个死会话
+    this.sessionSuffixes.set(chat.ref.key, Date.now().toString(36))
+    this.chats.delete(chat.ref.key)
+    for (const [sid, key] of [...this.bySession]) {
+      if (key === chat.ref.key) this.bySession.delete(sid)
+    }
+    try {
+      await chat.dispose()
+    } catch {
+      // agent 可能已被宿主释放，忽略
+    }
+    await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（会话状态已重置，再发一条会重新建会话）')
+  }
   // ── 出站 ───────────────────────────────────────────────────────────────────
 
   private onSessionEvent(session: Session, event: SessionEvent): void {
