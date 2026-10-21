@@ -78,6 +78,20 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         ok: { color: 'var(--dsw-alias-state-success-primary, #389e0d)', fontSize: '12px', margin: 0 },
       }
 
+      /** Remote 调用统一解包：宿主返回 { ok, value } / { ok:false, error }。 */
+      async function callRemote(fn, ...args) {
+        const result = await fn(...args)
+        if (result !== null && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'ok')) {
+          if (result.ok !== true) {
+            const code = result.error && result.error.code
+            const message = result.error && result.error.message
+            throw new Error((code ? code + ': ' : '') + (message || 'remote call failed'))
+          }
+          return result.value
+        }
+        return result
+      }
+
       /** 取 Remote 门面（客户端服务名 `remote`）。 */
       function remoteOf(ctx) {
         try {
@@ -151,8 +165,10 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           }
           setState({ phase: 'loading' })
           try {
-            const rows = await remote.settings.describe()
-            const row = (rows || []).find((item) => item && item.ns === NS)
+            const rows = await callRemote(remote.settings.describe, remote.settings)
+            const list = Array.isArray(rows) ? rows : []
+            if (!Array.isArray(rows)) throw new Error('describe 返回的不是数组：' + JSON.stringify(rows).slice(0, 200))
+            const row = list.find((item) => item && item.ns === NS)
             if (row === undefined) {
               setState({ phase: 'missing' })
               return
@@ -172,13 +188,15 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           if (remote === null) return
           setMessage(undefined)
           try {
-            const rows = await remote.settings.describe()
-            const row = (rows || []).find((item) => item && item.ns === NS)
+            const rows = await callRemote(remote.settings.describe, remote.settings)
+            const list = Array.isArray(rows) ? rows : []
+            if (!Array.isArray(rows)) throw new Error('describe 返回的不是数组：' + JSON.stringify(rows).slice(0, 200))
+            const row = list.find((item) => item && item.ns === NS)
             const next = {}
             for (const field of FIELDS) {
               if (Object.prototype.hasOwnProperty.call(draft, field.key)) next[field.key] = draft[field.key]
             }
-            await remote.settings.update(NS, next, row ? row.revision : revision)
+            await callRemote(remote.settings.update, remote.settings, NS, next, row ? row.revision : revision)
             setMessage({ ok: true, text: '已保存（写入 profile 的 cordis.patch.yml，插件会热重载）' })
             await load()
           } catch (error) {
