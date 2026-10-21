@@ -45,6 +45,12 @@ interface ChatState {
   turnStarted?: boolean
   /** 投递后的看门狗定时器。 */
   startTimer?: ReturnType<typeof setTimeout>
+  /** true=本次是新建的会话；false=resume 的旧会话（可能已归档，需要看门狗）。 */
+  fresh?: boolean
+  /** 本条消息投递时刻（看门狗判定存活用）。 */
+  dispatchedAt?: number
+  /** 这个会话最近一次收到任何事件的时刻。 */
+  lastEventAt?: number
   /** 这条消息是否已经重试过一次。 */
   retried?: boolean
 }
@@ -153,7 +159,8 @@ export class Bridge {
     const agents = (this.opts.ctx as HostContext).agents
     const suffix = this.sessionSuffixes.get(ref.key)
     const sessionId = makeSessionId(suffix === undefined ? sessionIdForChat(ref.key) : sessionIdForChat(ref.key) + '-' + suffix)
-    const meta: { cwd: string; agentPreset?: string } = { cwd: await this.cwdFor(ref) }
+    const cwd = await this.cwdFor(ref)
+    const meta: { cwd: string; agentPreset?: string } = { cwd }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
     const agentOptions: AgentOptions = {}
     if (this.opts.config.provider !== '') agentOptions.provider = this.opts.config.provider
@@ -173,10 +180,12 @@ export class Bridge {
     }
 
     let handle: { agent: Agent; dispose(): Promise<void> }
+    let created = true
     try {
       handle = await agents.create({ sessionId, meta, agentOptions })
     } catch (error) {
       this.opts.log('warn', '创建会话失败（多半是同 id 已有持久化日志），改用 resume: ' + describe(error))
+      created = false
       handle = await agents.resume({ resumeSessionId: sessionId, agentOptions })
     }
 
@@ -187,15 +196,43 @@ export class Bridge {
       buffer: [],
       lastReplyId: '',
       recentReplyIds: [],
+      fresh: created,
       turnStarted: false,
       retried: false,
     }
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
+    // 侧边栏工作区需要显式挂载会话（否则显示未分组）
+    await this.attachToWorkspace(cwd, handle.agent.session.id)
     this.opts.log('info', '会话就绪: ' + ref.key + ' → ' + String(handle.agent.session.id))
     return state
   }
 
+  /** 把会话挂到 cwd 所在的工作区（workspaceRegistry.attachSession），侧边栏就不再是"未分组"。 */
+  private async attachToWorkspace(cwd: string, sessionId: unknown): Promise<void> {
+    try {
+      const registry = (this.opts.ctx as unknown as {
+        get?(name: string): { list?(): { path?: string; attachSession?(id: never): Promise<void> }[] } | undefined
+      }).get?.('workspaceRegistry')
+      const workspaces = registry?.list?.() ?? []
+      const normalized = cwd.replace(/[\\/]+$/, '')
+      let best: { path?: string; attachSession?(id: never): Promise<void> } | undefined
+      for (const workspace of workspaces) {
+        const path = String(workspace.path ?? '').replace(/[\\/]+$/, '')
+        if (path === '') continue
+        const hit = normalized === path || normalized.startsWith(path + '\\') || normalized.startsWith(path + '/')
+        if (hit && (best === undefined || path.length > String(best.path ?? '').length)) best = workspace
+      }
+      if (best?.attachSession === undefined) {
+        this.opts.log('debug', '没有匹配的工作区（可把 ' + normalized + ' 加为工作区）')
+        return
+      }
+      await best.attachSession(String(sessionId) as never)
+      this.opts.log('info', '会话已挂到工作区: ' + String(best.path))
+    } catch (error) {
+      this.opts.log('debug', '挂工作区失败（忽略）: ' + describe(error))
+    }
+  }
   /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
   private async cwdFor(ref: ChatRef): Promise<string> {
     const base = this.opts.config.workspacePath.trim()
@@ -233,7 +270,9 @@ export class Bridge {
         void this.recoverChat(chat, error)
       })
     }
-    this.armWatchdog(chat, text)
+    chat.dispatchedAt = Date.now()
+    // 新建的会话一般不会失效；只有 resume 回来的旧会话（可能已归档）才需要看门狗
+    if (chat.fresh !== true) this.armWatchdog(chat, text)
   }
 
   /** 10s 内没等到 turn/start 就认为会话已失效（典型：会话被归档），换新会话重投一次。 */
@@ -242,7 +281,9 @@ export class Bridge {
     chat.turnStarted = false
     chat.startTimer = setTimeout(() => {
       chat.startTimer = undefined
-      if (chat.turnStarted || this.stopped) return
+      if (this.stopped) return
+      const alive = chat.turnStarted === true || (chat.lastEventAt ?? 0) > (chat.dispatchedAt ?? 0)
+      if (alive) return
       this.opts.log('warn', '会话没有开始执行（可能已归档或失效），换新会话重投: ' + chat.ref.key)
       void this.recoverAndRetry(chat, text)
     }, WATCHDOG_MS)
@@ -267,6 +308,10 @@ export class Bridge {
 
   /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */
   private async recoverChat(chat: ChatState, error: unknown): Promise<void> {
+    if (chat.startTimer !== undefined) {
+      clearTimeout(chat.startTimer)
+      chat.startTimer = undefined
+    }
     // 换一个会话 id：否则 create 会撞上归档/失效的旧 id，又 resume 回那个死会话
     this.sessionSuffixes.set(chat.ref.key, Date.now().toString(36))
     this.chats.delete(chat.ref.key)
@@ -288,6 +333,8 @@ export class Bridge {
     if (key === undefined) return
     const chat = this.chats.get(key)
     if (chat === undefined) return
+    // 任何事件都说明这一轮在跑（turn/start 未必总能收到）
+    chat.lastEventAt = Date.now()
 
     if (event.type === 'turn/start') {
       chat.buffer = []

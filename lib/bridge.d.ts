@@ -32,6 +32,8 @@ export declare class Bridge {
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
     private ensureChat;
+    /** 把会话挂到 cwd 所在的工作区（workspaceRegistry.attachSession），侧边栏就不再是"未分组"。 */
+    private attachToWorkspace;
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
     private cwdFor;
     private dispatch;
