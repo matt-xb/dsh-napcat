@@ -81,8 +81,11 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
       /** 取 Remote 门面（客户端服务名 `remote`）。 */
       function remoteOf(ctx) {
         try {
-          const remote = ctx.remote ?? (typeof ctx.get === 'function' ? ctx.get('remote') : undefined)
-          return remote && remote.settings && typeof remote.settings.describe === 'function' ? remote : null
+          const viaNamespace = ctx.remote && ctx.remote.settings
+          if (viaNamespace && typeof viaNamespace.describe === 'function') return { settings: viaNamespace }
+          const viaService = typeof ctx.get === 'function' ? ctx.get('remote.settings') : undefined
+          if (viaService && typeof viaService.describe === 'function') return { settings: viaService }
+          return null
         } catch (error) {
           return null
         }
@@ -222,17 +225,19 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
               : react.createElement('p', { style: message.ok ? style.ok : style.error }, message.text)))
       }
 
-      const inject = ['slots']
+      // remote.settings = @deepseek-ai/dsh-api-settings-controller 暴露的 settings Remote 域
+      // （configEditor / ctx.settings 的浏览器半边），读写配置都走它。
+      const inject = ['slots', 'remote', 'remote.settings']
 
-      /** 注册进「设置 → 插件」的 tab 列表。 */
+      /** 注册成「设置」左侧菜单里的一个独立页面（与「内置插件」同级）。 */
       function apply(ctx) {
         const Page = (props) => react.createElement(NapcatSettingsPage, Object.assign({}, props, { ctx: ctx }))
-        // 必须用 slots.inject 等宿主声明出 settings.plugins.tab 之后再注册；
+        // 用 slots.inject 等宿主声明出 settings.section 之后再注册；
         // 直接 register 会在槽还不存在时抛错，导致整条客户端 entry 变成 failed。
-        ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-          name: 'settings.plugins.tab',
-          id: NS,
-          order: 200,
+        ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: 'napcat',
+          order: 60,
           label: () => 'NapCat',
         }, Page))
       }
