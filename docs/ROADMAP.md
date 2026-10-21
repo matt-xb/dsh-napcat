@@ -226,4 +226,4 @@ dsh-napcat 不做"第二个 dsh-im"，也不做"第二个 dsh-onebot"。定位�
 
 ## 待实现（用户已确认排队）
 
-- [ ] **群/人性格（per-chat persona）**：设置页加一个多行配置（形如 `group:123456=你是群宠…` / `private:10001=私人助理…`），建会话时把命中文本写成该会话目录的 `AGENTS.md`（已存在则不覆盖，避免覆盖手改）。依赖 `perChatWorkspace`；宿主的 `agent-instructions` 会读 cwd 的 `AGENTS.md`/`CLAUDE.md`。用户 2026-10-21 明确：**先跑通基本功能，这个随后再加**。
+- [ ] **群/人性格（per-chat persona）**：设置页加多行配置（形如 `group:123456=你是群宠…` / `private:10001=私人助理…`）。实现照 **dsh-im** 的动态提示词上下文：`ctx.inject(['systemPrompt'], (promptCtx) => promptCtx.systemPrompt.context({ name: 'dsh-napcat:persona', order: 100, text: (assembly) => registry.get(assembly?.agent?.session?.id) ?? '' }))`，按 sessionId 查表（不用写 AGENTS.md）。用户 2026-10-21 明确：**先跑通基本功能，这个随后再加**。

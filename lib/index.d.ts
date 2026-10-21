@@ -12,6 +12,6 @@ import { Config } from './config.js';
 import type { Config as ConfigShape } from './config.js';
 export { Config };
 export declare const name = "dsh-napcat";
-/** tools = 注册工具；agents = 按 QQ 会话创建/恢复 agent。 */
+/** tools = 注册工具；agents = 按 QQ 会话创建/恢复 agent；workspaceRegistry = 把会话挂进工作区。 */
 export declare const inject: string[];
 export declare function apply(ctx: Context, rawConfig: ConfigShape): void;

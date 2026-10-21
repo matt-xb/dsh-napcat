@@ -32,7 +32,11 @@ export declare class Bridge {
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
     private ensureChat;
-    /** 把会话挂到 cwd 所在的工作区（workspaceRegistry.attachSession），侧边栏就不再是"未分组"。 */
+    /**
+     * 把会话挂进工作区（dsh-onebot 同款做法）：
+     *   workspaceRegistry.resolveByPath(根目录) ?? create(根目录, 标题) → workspace.attachSession(sessionId)
+     * 根目录固定为 `<workspacePath>/napcat`，所有 QQ 会话都挂到这一个工作区下。
+     */
     private attachToWorkspace;
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
     private cwdFor;
