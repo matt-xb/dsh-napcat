@@ -233,16 +233,16 @@ export class Bridge {
           let attached = false
           if (mediaType !== undefined && attachments?.admitPromptContent !== undefined) {
             try {
-              const parts = await attachments.admitPromptContent([
+              const admitted = await attachments.admitPromptContent([
                 { type: 'image', mediaType, data: buffer.toString('base64'), name: nameFromRef(fileRef, 'image') },
               ])
-              for (const part of parts) {
+              for (const part of admitted) {
                 if ((part as { type?: string }).type === 'image') blocks.push(part as ContentBlock)
               }
               attached = blocks.length > 0
-              this.debugLog(cwd, 'admit ok parts=' + parts.length + ' blocks=' + blocks.length)
+              this.debugLog(cwd, 'admit ok admitted=' + admitted.length + ' blocks=' + blocks.length)
               if (attached) parts.push({ type: 'image', mediaType, data: buffer.toString('base64'), name: nameFromRef(fileRef, 'image') })
-              this.opts.log('debug', '图片已走 admitPromptContent，产出 ' + parts.length + ' 段')
+              this.opts.log('debug', '图片已走 admitPromptContent，产出 ' + admitted.length + ' 段')
             } catch (error) {
               this.debugLog(cwd, 'admit 失败: ' + describe(error))
               this.opts.log('warn', 'admitPromptContent 失败: ' + describe(error))
