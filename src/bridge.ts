@@ -455,7 +455,14 @@ export class Bridge {
       if (text.trim() !== '') chat.buffer.push(text.trim())
       return
     }
+    if (event.type === 'assistant/attempt') {
+      const stream = (event.data as { stream?: unknown }).stream
+      this.opts.log('warn', '一次模型尝试未提交（无正式回复）: ' + JSON.stringify(stream ?? {}).slice(0, 400))
+      return
+    }
+
     if (event.type === 'turn/end') {
+      this.opts.log('info', 'turn/end 原因: ' + JSON.stringify((event.data as { reason?: unknown }).reason ?? {}).slice(0, 400))
       const reason = event.data.reason
       const text = chat.buffer.join('\n').trim()
       chat.buffer = []
