@@ -569,7 +569,13 @@ export class Bridge {
       logLine('进入图片分支')
       const holder = this.opts.ctx as unknown as { get?(name: string): unknown; sessionController?: unknown }
       const svc = (holder.get?.('sessionController') ?? holder.sessionController) as {
-        prompt?(request: { requestId: string; sessionId: unknown; mode: 'queue'; content: unknown[] }): Promise<unknown>
+        prompt?(request: {
+          requestId: string
+          sessionId: unknown
+          mode: 'queue'
+          signal: AbortSignal
+          content: unknown[]
+        }): Promise<unknown>
       } | undefined
       logLine('controller=' + (svc?.prompt !== undefined ? 'yes' : 'no'))
       if (svc?.prompt !== undefined) {
@@ -579,6 +585,8 @@ export class Bridge {
               requestId: randomUUID(),
               sessionId: chat.agent.session.id,
               mode: 'queue',
+              // 宿主实现会读 signal.throwIfAborted()，不传就抛 TypeError
+              signal: AbortSignal.timeout(120_000),
               content: [...parts, { type: 'text', text }],
             })
             logLine('controller 投递成功')
