@@ -40,8 +40,8 @@ export declare class Bridge {
      * 把会话挂进工作区：宿主要求 **工作区路径必须等于会话 cwd**，所以每个聊天目录本身就是
      * 一个工作区（一群一格 / 一人一格）。照 dsh-onebot：resolveByPath → create(path,title) → attachSession。
      */
-    /** QQ 会话可能被用户归档过；归档门禁会让每一轮 blocked，所以用前先解除归档。 */
-    private ensureNotArchived;
+    /** 该会话是否已被归档（归档门禁会把每一轮判成 blocked，所以要换新会话）。 */
+    private isArchived;
     /** 重新解析 personaOverrides（配置热更新时调用）。 */
     refreshPersonas(): void;
     /** systemPrompt.context 的取值函数：按 assembly 里的 sessionId 找该会话的人设。 */

@@ -171,9 +171,16 @@ export class Bridge {
     const cwdTag = this.opts.config.perChatWorkspace && this.opts.config.workspacePath.trim() !== ''
       ? '-w' + shortHash(cwd)
       : ''
-    const sessionId = makeSessionId(
+    let sessionId = makeSessionId(
       sessionIdForChat(ref.key) + cwdTag + (suffix === undefined ? '' : '-' + suffix),
     )
+    // 用户归档过这个会话 → 不解除归档（尊重你的意图），直接换一个新会话
+    if (this.isArchived(String(sessionId))) {
+      const rotated = Date.now().toString(36)
+      this.sessionSuffixes.set(ref.key, rotated)
+      sessionId = makeSessionId(sessionIdForChat(ref.key) + cwdTag + '-' + rotated)
+      this.opts.log('info', '会话已被归档，改用新会话: ' + String(sessionId))
+    }
     const meta: { cwd: string; agentPreset?: string } = { cwd }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
     const agentOptions: AgentOptions = {}
@@ -262,7 +269,6 @@ export class Bridge {
       throw error
     }
 
-    await this.ensureNotArchived(handle.agent.session.id)
     // QQ 渠道没人能点"同意"：审批策略设为 never（否则每轮 turn 会被 blocked）
     try {
       const approval = (this.opts.ctx as unknown as {
@@ -301,18 +307,16 @@ export class Bridge {
    * 把会话挂进工作区：宿主要求 **工作区路径必须等于会话 cwd**，所以每个聊天目录本身就是
    * 一个工作区（一群一格 / 一人一格）。照 dsh-onebot：resolveByPath → create(path,title) → attachSession。
    */
-  /** QQ 会话可能被用户归档过；归档门禁会让每一轮 blocked，所以用前先解除归档。 */
-  private async ensureNotArchived(sessionId: unknown): Promise<void> {
+  /** 该会话是否已被归档（归档门禁会把每一轮判成 blocked，所以要换新会话）。 */
+  private isArchived(sessionId: string): boolean {
     try {
       const registry = (this.opts.ctx as unknown as {
-        workspaceRegistry?: { unarchiveSession?(id: never): Promise<void> }
+        workspaceRegistry?: { archivedSessionIds?: readonly unknown[] }
       }).workspaceRegistry
-      if (registry?.unarchiveSession === undefined) return
-      await registry.unarchiveSession(String(sessionId) as never)
-      this.opts.log('info', '已确保会话未归档（归档会导致每轮 blocked）')
-    } catch (error) {
-      // 未归档时会抛（正常），只记 debug
-      this.opts.log('debug', '解除归档跳过: ' + describe(error))
+      const ids = registry?.archivedSessionIds ?? []
+      return ids.some(id => String(id) === sessionId)
+    } catch {
+      return false
     }
   }
   /** 重新解析 personaOverrides（配置热更新时调用）。 */
