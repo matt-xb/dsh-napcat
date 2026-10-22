@@ -195,23 +195,29 @@ export class Bridge {
           // 走 DSH 原生附件：图片作为 image block 进模型请求；纯文本模型由宿主降级为占位文本
           const buffer = await readFile(saved.path)
           const mediaType = imageMediaType(buffer)
-          const attachments = (this.opts.ctx as unknown as {
-            attachments?: { saveImages?(inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>): Promise<unknown[]> }
-          }).attachments
+          // 走宿主官方 prompt 附件准入（GUI 上传图片的同一入口）
+          const ctxAny = this.opts.ctx as unknown as { get?(name: string): unknown; attachments?: unknown }
+          const attachments = (ctxAny.get?.('attachments') ?? ctxAny.attachments) as {
+            admitPromptContent?(parts: Array<{ type: 'image'; mediaType: string; data: string; name?: string }>): Promise<unknown[]>
+          } | undefined
           let attached = false
-          if (mediaType !== undefined && attachments?.saveImages !== undefined) {
+          if (mediaType !== undefined && attachments?.admitPromptContent !== undefined) {
             try {
-              const refs = await attachments.saveImages([
-                { data: new Uint8Array(buffer), mediaType, name: nameFromRef(fileRef, 'image') },
+              const parts = await attachments.admitPromptContent([
+                { type: 'image', mediaType, data: buffer.toString('base64'), name: nameFromRef(fileRef, 'image') },
               ])
-              const ref = refs[0]
-              if (ref !== undefined) {
-                blocks.push({ type: 'image', attachment: ref } as ContentBlock)
-                attached = true
+              for (const part of parts) {
+                if ((part as { type?: string }).type === 'image') blocks.push(part as ContentBlock)
               }
+              attached = blocks.length > 0
+              this.opts.log('debug', '图片已走 admitPromptContent，产出 ' + parts.length + ' 段')
             } catch (error) {
-              this.opts.log('warn', '图片登记为附件失败，退回路径注释: ' + describe(error))
+              this.opts.log('warn', 'admitPromptContent 失败: ' + describe(error))
             }
+          } else if (mediaType === undefined) {
+            this.opts.log('warn', '图片类型无法识别（不是 png/jpeg/gif/webp），只给路径')
+          } else {
+            this.opts.log('warn', '宿主没有 attachments.admitPromptContent，只给路径')
           }
           // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
           // 视觉模型另外还能直接拿到 image block。
