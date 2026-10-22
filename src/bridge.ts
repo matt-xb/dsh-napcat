@@ -27,7 +27,7 @@ import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, titleFrom, toText } from './text.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
 /** 宿主注入的服务（inject 保证就绪）。 */
@@ -524,10 +524,21 @@ export class Bridge {
     }
     // 有图片时优先走 session-controller 的 prompt（GUI 传图同款入口，唯一能把图带进会话的路径）
     if (parts.length > 0) {
+      const logLine = (note: string): void => {
+        try {
+          const dir = chat.cwd ?? process.cwd()
+          void appendFile(join(dir, 'napcat-inbox', '_image-debug.log'),
+            new Date().toISOString() + ' v0.3.6 parts=' + parts.length + ' ' + note + '\n').catch(() => undefined)
+        } catch {
+          // 诊断日志写不了就算了
+        }
+      }
+      logLine('进入图片分支')
       const holder = this.opts.ctx as unknown as { get?(name: string): unknown; sessionController?: unknown }
       const svc = (holder.get?.('sessionController') ?? holder.sessionController) as {
         prompt?(request: { requestId: string; sessionId: unknown; mode: 'queue'; content: unknown[] }): Promise<unknown>
       } | undefined
+      logLine('controller=' + (svc?.prompt !== undefined ? 'yes' : 'no'))
       if (svc?.prompt !== undefined) {
         void (async () => {
           try {
@@ -537,8 +548,10 @@ export class Bridge {
               mode: 'queue',
               content: [...parts, { type: 'text', text }],
             })
+            logLine('controller 投递成功')
             this.opts.log('info', '已通过 sessionController 投递（含图片）: ' + chat.ref.key)
           } catch (error) {
+            logLine('controller 投递失败: ' + describe(error))
             this.opts.log('warn', 'sessionController 投递失败，退回 followup: ' + describe(error))
             try {
               chat.agent.followup(createUserMessage({
