@@ -81,6 +81,20 @@ function findId(raw: string): string | undefined {
   return match?.[1]
 }
 
+/** 从空间目录文本里按名字找 id（JSON 优先，失败退回正则）。 */
+function findIdByName(raw: string, name: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { items?: Array<{ id?: string; name?: string }> }
+    const found = parsed.items?.find(item => item.name === name)
+    if (found?.id !== undefined && found.id !== '') return found.id
+  } catch {
+    // 不是 JSON
+  }
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp('"id"\\s*:\\s*"([^"]+)"\\s*,\\s*"name"\\s*:\\s*"' + escaped + '"').exec(raw)
+  return match?.[1]
+}
+
 export class MemoryStore {
   constructor(private readonly opts: MemoryOptions) {}
 
@@ -132,11 +146,25 @@ export class MemoryStore {
         // 没有缓存
       }
       const name = this.opts.spacePrefix + chatKey
-      const created = await this.callTool('mnemon_memory_body_create', {
-        name,
-        description: 'QQ ' + chatKey + ' 的长期记忆（dsh-napcat 自动维护）',
-      }, agent)
-      const id = findId(created)
+      // 创建（返回值不一定带 id，所以随后用 bodies 回查）
+      try {
+        await this.callTool('mnemon_memory_body_create', {
+          name,
+          description: 'QQ ' + chatKey + ' 的长期记忆（dsh-napcat 自动维护）',
+        }, agent)
+      } catch (error) {
+        this.opts.log('debug', 'memory_body_create 失败（可能已存在）: ' + (error instanceof Error ? error.message : String(error)))
+      }
+      const catalog = await this.callTool('mnemon_memory_bodies', {}, agent)
+      const id = findIdByName(catalog, name) ?? findId(catalog)
+      if (id !== undefined) {
+        // 新建空间默认 active=false，写入前必须激活（否则 mnemon_remember 会拒绝）
+        try {
+          await this.callTool('mnemon_memory_body_update', { memoryBodyId: id, active: true }, agent)
+        } catch (error) {
+          this.opts.log('debug', '激活记忆空间失败: ' + (error instanceof Error ? error.message : String(error)))
+        }
+      }
       if (id === undefined || id === '') return undefined
       await writeFile(cachePath, JSON.stringify({ name, id }, null, 2), 'utf8')
       this.opts.log('info', '已创建记忆空间: ' + name + ' (' + id + ')')
