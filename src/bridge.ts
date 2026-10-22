@@ -24,7 +24,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, titleFrom, toText } from './text.js'
+import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
@@ -190,13 +190,19 @@ export class Bridge {
 
     // 记忆命令（插件直写，不经过模型）
     if (this.opts.config.memoryEnabled) {
-      const rememberMatch = /记住[:：]\s*([\s\S]+)$/.exec(rawText)
+      // 命令前先去掉 @段 与触发词，否则「小灯记忆」匹配不上
+      let commandText = rawText.replace(/\[CQ:[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim()
+      for (const word of this.opts.config.triggerKeywords) {
+        if (word !== '') commandText = stripKeyword(commandText, word)
+      }
+      commandText = commandText.trim()
+      const rememberMatch = /^记住[:：]?\s*([\s\S]+)$/.exec(commandText)
       if (rememberMatch !== null && rememberMatch[1] !== undefined && rememberMatch[1].trim() !== '') {
         const ok = await this.mem.remember(ref.key, rememberMatch[1], chat.agent, ['group:' + ref.id])
         await this.sendText(chat, '✅ ' + ok)
         return
       }
-      if (/^\s*记忆\s*$/.test(rawText.replace(/\[CQ:[^\]]*\]/g, '').trim())) {
+      if (/^记忆\s*$/.test(commandText)) {
         const recentForQuery = await this.mem.readRecent(ref.key, 10)
         const recalled = await this.mem.recall(ref.key, recentForQuery.join(' '), chat.agent)
         await this.sendText(chat, recalled === '' ? '本群还没有长期记忆' : '本群记忆（相关片段）：\n' + recalled)
