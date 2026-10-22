@@ -21,7 +21,7 @@ export { Config }
 
 export const name = 'dsh-napcat'
 /** tools = 注册工具；agents = 按 QQ 会话创建/恢复 agent；workspaceRegistry = 把会话挂进工作区。 */
-export const inject = ['tools', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt', 'agentDefaultModel', 'agentPresets', 'approval']
+export const inject = ['tools', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt', 'agentDefaultModel', 'agentPresets', 'approval', 'sessionTitle']
 
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2 }
 
