@@ -21,6 +21,9 @@ export declare class Bridge {
     private readonly opts;
     /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
     private readonly mem;
+    /** 已尝试预热的聊天（每会话一次）。 */
+    /** 上次预热尝试时间（避免频繁重试）。 */
+    private readonly warmAttempts;
     private readonly chats;
     private readonly bySession;
     /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
@@ -37,6 +40,10 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    /** 缓冲不足时才预热；同一聊天 5 分钟内最多尝试一次。 */
+    private maybeWarmup;
+    /** 用 NapCat 的历史消息接口预热 recent 缓冲（群 get_group_msg_history / 私聊 get_friend_msg_history）。 */
+    private warmup;
     private handleEventInner;
     /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
     private debugLog;

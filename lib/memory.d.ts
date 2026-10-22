@@ -41,6 +41,16 @@ export declare class MemoryStore {
         text: string;
         at?: number;
     }): Promise<void>;
+    /** 预热：用历史消息覆盖 recent（调用方判断缓冲是否不足）。 */
+    seedRecent(chatKey: string, entries: Array<{
+        nick: string;
+        text: string;
+        at?: number;
+    }>): Promise<number>;
+    /** 缓冲里最新一条的时间戳（毫秒；空=0）。用于判断缓冲是否"过期"。 */
+    recentNewestAt(chatKey: string): Promise<number>;
+    /** 当前缓冲条数（用于判断是否需要预热）。 */
+    recentCount(chatKey: string): Promise<number>;
     /** 读最近 N 条，返回「昵称: 内容」行。 */
     readRecent(chatKey: string, limit?: number): Promise<string[]>;
     /** 组装注入文本（含 @ 优先级指令），超预算截断。 */

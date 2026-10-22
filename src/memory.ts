@@ -241,6 +241,48 @@ export class MemoryStore {
     }
   }
 
+  /** 预热：用历史消息覆盖 recent（调用方判断缓冲是否不足）。 */
+  async seedRecent(chatKey: string, entries: Array<{ nick: string; text: string; at?: number }>): Promise<number> {
+    if (entries.length === 0) return 0
+    const dir = await this.ensureDir(chatKey)
+    const lines = entries.map(entry => JSON.stringify({
+      t: entry.at ?? Date.now(),
+      nick: entry.nick.slice(0, 24),
+      text: entry.text.slice(0, 500),
+    }))
+    await writeFile(join(dir, RECENT_FILE), lines.slice(-this.opts.recentLimit).join('\n') + '\n', 'utf8')
+    return Math.min(entries.length, this.opts.recentLimit)
+  }
+
+  /** 缓冲里最新一条的时间戳（毫秒；空=0）。用于判断缓冲是否"过期"。 */
+  async recentNewestAt(chatKey: string): Promise<number> {
+    try {
+      const content = await readFile(join(this.dirFor(chatKey), RECENT_FILE), 'utf8')
+      const lines = content.split('\n').filter(part => part.trim() !== '')
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        try {
+          const parsed = JSON.parse(lines[index] as string) as { t?: number }
+          if (typeof parsed.t === 'number') return parsed.t
+        } catch {
+          // 坏行跳过
+        }
+      }
+      return 0
+    } catch {
+      return 0
+    }
+  }
+
+  /** 当前缓冲条数（用于判断是否需要预热）。 */
+  async recentCount(chatKey: string): Promise<number> {
+    try {
+      const content = await readFile(join(this.dirFor(chatKey), RECENT_FILE), 'utf8')
+      return content.split('\n').filter(part => part.trim() !== '').length
+    } catch {
+      return 0
+    }
+  }
+
   /** 读最近 N 条，返回「昵称: 内容」行。 */
   async readRecent(chatKey: string, limit?: number): Promise<string[]> {
     try {

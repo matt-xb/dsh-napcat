@@ -76,6 +76,9 @@ export interface BridgeOptions {
 export class Bridge {
   /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
   private readonly mem: MemoryStore
+  /** 已尝试预热的聊天（每会话一次）。 */
+  /** 上次预热尝试时间（避免频繁重试）。 */
+  private readonly warmAttempts = new Map<string, number>()
   private readonly chats = new Map<string, ChatState>()
   private readonly bySession = new Map<string, string>()
   /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
@@ -140,6 +143,47 @@ export class Bridge {
       }
       this.debugLog(cwd, '出站异常: ' + describe(error))
       throw error
+    }
+  }
+
+  /** 缓冲不足时才预热；同一聊天 5 分钟内最多尝试一次。 */
+  private async maybeWarmup(ref: ChatRef): Promise<void> {
+    try {
+      const last = this.warmAttempts.get(ref.key) ?? 0
+      if (Date.now() - last < 5 * 60_000) return
+      const have = await this.mem.recentCount(ref.key)
+      const newest = await this.mem.recentNewestAt(ref.key)
+      const staleMs = this.opts.config.warmupStaleMinutes * 60_000
+      const enough = have >= this.opts.config.warmupHistory
+      const fresh = newest > 0 && Date.now() - newest <= staleMs
+      if (enough && fresh) return
+      this.warmAttempts.set(ref.key, Date.now())
+      await this.warmup(ref)
+    } catch (error) {
+      this.opts.log('debug', '预热判断失败: ' + (error instanceof Error ? error.message : String(error)))
+    }
+  }
+
+  /** 用 NapCat 的历史消息接口预热 recent 缓冲（群 get_group_msg_history / 私聊 get_friend_msg_history）。 */
+  private async warmup(ref: ChatRef): Promise<void> {
+    try {
+      const count = this.opts.config.warmupHistory
+      const isGroup = ref.kind === 'group'
+      const action = isGroup ? 'get_group_msg_history' : 'get_friend_msg_history'
+      const params = isGroup
+        ? { group_id: ref.id, count, reverse_order: false }
+        : { user_id: ref.id, count, reverseOrder: false }
+      const data = await this.opts.conn.call<{ messages?: Array<{ sender?: { nickname?: unknown; card?: unknown }; message?: unknown; raw_message?: unknown; time?: number }> }>(action, params)
+      const list = Array.isArray(data?.messages) ? data.messages : []
+      const entries = list.map(item => ({
+        nick: String(item.sender?.card ?? item.sender?.nickname ?? '?'),
+        text: toText(item.message as never) || String(item.raw_message ?? ''),
+        at: typeof item.time === 'number' ? item.time * 1000 : undefined,
+      })).filter(entry => entry.text !== '')
+      const seeded = await this.mem.seedRecent(ref.key, entries)
+      this.opts.log('info', '预热历史 ' + ref.key + '：' + seeded + ' 条')
+    } catch (error) {
+      this.opts.log('debug', '预热历史失败: ' + (error instanceof Error ? error.message : String(error)))
     }
   }
 

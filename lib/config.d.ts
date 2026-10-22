@@ -55,6 +55,8 @@ export interface Config {
     recentLimit: number;
     injectRecent: number;
     injectMaxChars: number;
+    warmupHistory: number;
+    warmupStaleMinutes: number;
 }
 export declare const Config: Z<Config>;
 /** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */

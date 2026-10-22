@@ -58,6 +58,8 @@ export interface Config {
   recentLimit: number
   injectRecent: number
   injectMaxChars: number
+  warmupHistory: number
+  warmupStaleMinutes: number
 }
 
 export const Config: Z<Config> = z.object({
@@ -115,6 +117,8 @@ export const Config: Z<Config> = z.object({
   recentLimit: z.natural().default(200).description('每群保留最近多少条消息').volatile(),
   injectRecent: z.natural().default(20).description('触发时注入最近多少条对话').volatile(),
   injectMaxChars: z.natural().default(4000).description('记忆注入总字符上限').volatile(),
+  warmupHistory: z.natural().default(0).description('预热条数：缓冲不足这个条数就拉历史补齐（0=关闭）').volatile(),
+  warmupStaleMinutes: z.natural().default(10).description('预热新鲜度：缓冲最新一条超过这么多分钟也算过期，会重新拉历史').volatile(),
 }) as unknown as Z<Config>
 
 /** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */
@@ -149,6 +153,8 @@ export const DEFAULTS: Config = {
   recentLimit: 200,
   injectRecent: 20,
   injectMaxChars: 4000,
+  warmupHistory: 0,
+  warmupStaleMinutes: 10,
 }
 
 /** volatile 字段在运行时是 `{ get(): T }` 的稳定引用（cosmokit 的 Volatile）。 */
