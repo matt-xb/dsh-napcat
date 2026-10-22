@@ -26,7 +26,6 @@ import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.j
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, titleFrom, toText } from './text.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
-import { randomUUID } from 'node:crypto'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
@@ -188,7 +187,7 @@ export class Bridge {
     try {
       const dir = cwd ?? join(this.opts.config.workspacePath || process.cwd(), 'napcat')
       void appendFile(join(dir, 'napcat-inbox', '_image-debug.log'),
-        new Date().toISOString() + ' v0.3.6 ' + note + '\n').catch(() => undefined)
+        new Date().toISOString() + ' v0.3.7 ' + note + '\n').catch(() => undefined)
     } catch {
       // 诊断日志写不了就算了
     }
@@ -554,60 +553,7 @@ export class Bridge {
         this.opts.log('debug', '设置会话标题失败: ' + describe(error))
       }
     }
-    // 有图片时优先走 session-controller 的 prompt（GUI 传图同款入口，唯一能把图带进会话的路径）
-    if (parts.length > 0) {
-      const logLine = (note: string): void => {
-        try {
-          const dir = chat.cwd ?? process.cwd()
-          void appendFile(join(dir, 'napcat-inbox', '_image-debug.log'),
-            new Date().toISOString() + ' v0.3.6 parts=' + parts.length + ' ' + note + '\n').catch(() => undefined)
-        } catch {
-          // 诊断日志写不了就算了
-        }
-      }
-      this.debugLog(chat.cwd, 'dispatch parts=' + parts.length)
-      logLine('进入图片分支')
-      const holder = this.opts.ctx as unknown as { get?(name: string): unknown; sessionController?: unknown }
-      const svc = (holder.get?.('sessionController') ?? holder.sessionController) as {
-        prompt?(request: {
-          requestId: string
-          sessionId: unknown
-          mode: 'queue'
-          signal: AbortSignal
-          content: unknown[]
-        }): Promise<unknown>
-      } | undefined
-      logLine('controller=' + (svc?.prompt !== undefined ? 'yes' : 'no'))
-      if (svc?.prompt !== undefined) {
-        void (async () => {
-          try {
-            await svc.prompt!({
-              requestId: randomUUID(),
-              sessionId: chat.agent.session.id,
-              mode: 'queue',
-              // 宿主实现会读 signal.throwIfAborted()，不传就抛 TypeError
-              signal: AbortSignal.timeout(120_000),
-              content: [...parts, { type: 'text', text }],
-            })
-            logLine('controller 投递成功')
-            this.opts.log('info', '已通过 sessionController 投递（含图片）: ' + chat.ref.key)
-          } catch (error) {
-            logLine('controller 投递失败: ' + describe(error))
-            this.opts.log('debug', 'sessionController 投递失败，退回 followup（已验证可用）: ' + describe(error))
-            try {
-              chat.agent.followup(createUserMessage({
-                content: [...blocks, { type: 'text', text }],
-                source: { kind: 'plugin:dsh-napcat' },
-              }))
-            } catch (fallbackError) {
-              this.opts.log('warn', '退回 followup 也失败: ' + describe(fallbackError))
-            }
-          }
-        })()
-        return
-      }
-      this.opts.log('warn', '拿不到 sessionController，图片只能走 followup（可能丢图）')
-    }
+    if (parts.length > 0) this.debugLog(chat.cwd, '图片消息 blocks=' + blocks.length + ' parts=' + parts.length)
     let pending: unknown
     try {
       pending = chat.agent.followup(createUserMessage({
