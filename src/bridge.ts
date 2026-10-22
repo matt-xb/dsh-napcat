@@ -162,7 +162,20 @@ export class Bridge {
 
   // ── 会话装配 ───────────────────────────────────────────────────────────────
 
-  private async ensureChat(ref: ChatRef): Promise<ChatState> {
+  /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */
+  private readonly pendingChats = new Map<string, Promise<ChatState>>()
+
+  private ensureChat(ref: ChatRef): Promise<ChatState> {
+    const existing = this.chats.get(ref.key)
+    if (existing !== undefined) return Promise.resolve(existing)
+    const inflight = this.pendingChats.get(ref.key)
+    if (inflight !== undefined) return inflight
+    const job = this.createChat(ref).finally(() => { this.pendingChats.delete(ref.key) })
+    this.pendingChats.set(ref.key, job)
+    return job
+  }
+
+  private async createChat(ref: ChatRef): Promise<ChatState> {
     const existing = this.chats.get(ref.key)
     if (existing !== undefined) return existing
 
@@ -188,6 +201,14 @@ export class Bridge {
         this.opts.log('info', '会话已被归档，改用未归档的会话: ' + String(sessionId))
         break
       }
+    }
+    // 宿主注册表里已有活着的 agent（上一轮装配失败/并发场景）→ 直接复用，
+    // 否则 resume/create 会撞 "already owned by an active write handle" / "already exists"
+    let handle: { agent: Agent; dispose(): Promise<void> } | undefined
+    const liveAgent = (agents as unknown as { get?(id: never): unknown }).get?.(String(sessionId) as never) as Agent | undefined
+    if (liveAgent !== undefined) {
+      this.opts.log('info', '复用已存在的 agent: ' + String(sessionId))
+      handle = { agent: liveAgent, dispose: async () => undefined }
     }
     const meta: { cwd: string; agentPreset?: string } = { cwd }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
@@ -231,8 +252,8 @@ export class Bridge {
       this.opts.log('warn', '没有可用的模型：在「设置 → NapCat」里填 provider/model，或先给 DSH 配一个默认模型')
     }
 
-    let handle: { agent: Agent; dispose(): Promise<void> }
     let created = true
+    if (handle === undefined) {
     // 照 dsh-onebot：先用 sessionPersistence.stat 探测是否已有持久化日志，避免 create 抛错
     let exists = false
     const persistence = (this.opts.ctx as unknown as {
@@ -262,6 +283,8 @@ export class Bridge {
       created = false
       handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
     }
+    }
+
     // 照 dsh-onebot：create/resume 后必须等 agent 就绪（whenIdle）再投递消息，
     // 否则 followup 落不到正在初始化的 agent 上，表现为"消息进去了但这一轮不跑"
     try {

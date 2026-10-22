@@ -35,7 +35,10 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */
+    private readonly pendingChats;
     private ensureChat;
+    private createChat;
     /**
      * 把会话挂进工作区：宿主要求 **工作区路径必须等于会话 cwd**，所以每个聊天目录本身就是
      * 一个工作区（一群一格 / 一人一格）。照 dsh-onebot：resolveByPath → create(path,title) → attachSession。
