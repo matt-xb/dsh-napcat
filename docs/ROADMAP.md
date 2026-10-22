@@ -256,3 +256,15 @@ dsh-napcat 不做"第二个 dsh-im"，也不做"第二个 dsh-onebot"。定位�
 
 **当前替代方案（已上线）**：收图 → 存 `<会话cwd>/napcat-inbox/` → 文本注释
 `[图片: <绝对路径>]`，由 agent 用 modlens / read_image 读。v0.3.2 起路径注释始终保留。
+### 已解决（2026-10-22）：真正原因是两个 bug
+
+1. `resolveInboundMedia` 里 `const parts = await attachments.admitPromptContent(...)`
+   **遮蔽**了外层的 `parts` 数组 → 图片 parts 永远是空的（已改名 `admitted`）。
+2. `this.dispatch(chat, text)` **调用点漏传** `media.blocks` / `media.parts`
+   → 即便 parts 有值也传不进去（已改为 `dispatch(chat, text, media.blocks, media.parts)`）。
+
+修好之后 `agent.followup` **能正常携带 ImageBlock**（QQ 图片原生送达，模型直接看到像素）。
+`sessions-controller.prompt` 那条还需要 `signal: AbortSignal`（已补上，作为主路径），
+失败会自动退回 followup —— 两条路都能工作。
+
+排查手段：`<会话cwd>/napcat-inbox/_image-debug.log`（每次收图逐步落盘，可随时删除）。
