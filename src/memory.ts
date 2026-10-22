@@ -108,6 +108,15 @@ export class MemoryStore {
     return collectText(result)
   }
 
+  /** 记忆相关失败：warn 到控制台 + 追加到 memory/_debug.log，便于事后定位。 */
+  private reportFailure(what: string, error: unknown): void {
+    const reason = error instanceof Error ? error.message : String(error)
+    this.opts.log('warn', what + ': ' + reason)
+    void mkdir(this.opts.root, { recursive: true })
+      .then(() => appendFile(join(this.opts.root, '_debug.log'), new Date().toISOString() + ' ' + what + ': ' + reason + '\n', 'utf8'))
+      .catch(() => undefined)
+  }
+
   /** 拿到（或创建）本聊天的 mnemon 空间 id；失败返回 undefined（自动退化为文件记忆）。 */
   async ensureSpace(chatKey: string, agent: unknown): Promise<string | undefined> {
     if (this.opts.backend === 'file') return undefined
@@ -131,7 +140,7 @@ export class MemoryStore {
       this.opts.log('info', '已创建记忆空间: ' + name + ' (' + id + ')')
       return id
     } catch (error) {
-      this.opts.log('debug', '记忆空间不可用，退化为本地笔记: ' + (error instanceof Error ? error.message : String(error)))
+      this.reportFailure('记忆空间不可用，退化为本地笔记', error)
       return undefined
     }
   }
@@ -153,7 +162,7 @@ export class MemoryStore {
         }, agent)
         return '已写入本群长期记忆（mnemon）'
       } catch (error) {
-        this.opts.log('warn', 'mnemon 写入失败，落本地笔记: ' + (error instanceof Error ? error.message : String(error)))
+        this.reportFailure('mnemon 写入失败，落本地笔记', error)
       }
     }
     const dir = await this.ensureDir(chatKey)
