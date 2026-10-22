@@ -262,6 +262,21 @@ export class Bridge {
       throw error
     }
 
+    // QQ 渠道没人能点"同意"：审批策略设为 never（否则每轮 turn 会被 blocked）
+    try {
+      const approval = (this.opts.ctx as unknown as {
+        approval?: { setPolicy?(agent: unknown, policy: 'ask' | 'never'): void }
+      }).approval
+      if (approval?.setPolicy !== undefined) {
+        approval.setPolicy(handle.agent, 'never')
+        this.opts.log('info', '审批策略已设为 never（QQ 会话无法交互审批）')
+      } else {
+        this.opts.log('warn', '宿主没有 approval.setPolicy（可能仍会被审批挡住）')
+      }
+    } catch (error) {
+      this.opts.log('warn', '设置审批策略失败: ' + describe(error))
+    }
+
     const state: ChatState = {
       ref,
       agent: handle.agent,
