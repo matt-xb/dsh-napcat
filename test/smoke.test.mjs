@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { findKeyword, mentions, parseCq, parsePersonaOverrides, shortHash, splitText, stripKeyword, toText } from '../lib/text.js'
+import { findKeyword, mentions, parseCq, parsePersonaOverrides, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
 const config = {
@@ -113,4 +113,11 @@ test('parsePersonaOverrides 解析群/人性格', () => {
 test('parsePersonaOverrides 空输入返回空表', () => {
   assert.equal(parsePersonaOverrides('').size, 0)
   assert.equal(parsePersonaOverrides('group:1=x\nprivate:2=y').size, 2)
+})
+test('titleFrom 生成 MM-DD + 内容摘要', () => {
+  const day = new Date(2026, 9, 22)
+  assert.equal(titleFrom('小灯讲个笑话', day), '10-22 小灯讲个笑话')
+  assert.equal(titleFrom('   ', day), '10-22')
+  const long = '一二三四五六七八九十一二三四五六七八九十一二三'
+  assert.equal(titleFrom(long, day), '10-22 ' + long.slice(0, 18) + '…')
 })

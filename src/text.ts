@@ -169,3 +169,14 @@ export function parsePersonaOverrides(raw: string): Map<string, string> {
   }
   return map
 }
+/** 会话标题：`MM-DD 内容摘要`（去掉换行/CQ 残留，最多取 18 字）。 */
+export function titleFrom(text: string, now: Date = new Date()): string {
+  const cleaned = text
+    .replace(/\[CQ:[^\]]*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const stamp = String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
+  if (cleaned === '') return stamp
+  const body = cleaned.length > 18 ? cleaned.slice(0, 18) + '…' : cleaned
+  return stamp + ' ' + body
+}

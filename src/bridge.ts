@@ -23,7 +23,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, shortHash, splitText, toText } from './text.js'
+import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, shortHash, splitText, titleFrom, toText } from './text.js'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
 /** 宿主注入的服务（inject 保证就绪）。 */
@@ -52,6 +52,8 @@ interface ChatState {
   dispatchedAt?: number
   /** 这个会话最近一次收到任何事件的时刻。 */
   lastEventAt?: number
+  /** 是否已按首条消息设置过标题。 */
+  titleSet?: boolean
   /** 最近一次投递给模型的文本（ENOENT 自愈时重投用）。 */
   lastText?: string
   /** 这条消息是否已经重试过一次。 */
@@ -295,20 +297,6 @@ export class Bridge {
       turnStarted: false,
       retried: false,
     }
-    // 会话标题：`群 <号>` / `私聊 <QQ>`（宿主自动标题不覆盖插件创建的会话）
-    try {
-      const titles = (this.opts.ctx as unknown as {
-        sessionTitle?: { rename?(session: unknown, title: string): { title?: string } }
-      }).sessionTitle
-      if (titles?.rename !== undefined) {
-        const named = titles.rename(handle.agent.session, workspaceTitle(ref))
-        this.opts.log('info', '会话标题: ' + String(named?.title ?? workspaceTitle(ref)))
-      } else {
-        this.opts.log('debug', '宿主没有 sessionTitle 服务，跳过会话标题')
-      }
-    } catch (error) {
-      this.opts.log('debug', '设置会话标题失败: ' + describe(error))
-    }
 
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
@@ -396,6 +384,18 @@ export class Bridge {
   private dispatch(chat: ChatState, text: string): void {
     chat.buffer = []
     chat.lastText = text
+    if (chat.titleSet !== true) {
+      chat.titleSet = true
+      try {
+        const titles = (this.opts.ctx as unknown as {
+          sessionTitle?: { rename?(session: unknown, title: string): { title?: string } }
+        }).sessionTitle
+        const named = titles?.rename?.(chat.agent.session, titleFrom(text))
+        this.opts.log('info', '会话标题: ' + String(named?.title ?? titleFrom(text)))
+      } catch (error) {
+        this.opts.log('debug', '设置会话标题失败: ' + describe(error))
+      }
+    }
     let pending: unknown
     try {
       pending = chat.agent.followup(createUserMessage({
