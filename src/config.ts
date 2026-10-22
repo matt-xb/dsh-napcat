@@ -52,6 +52,11 @@ export interface Config {
   model: string
   /** 日志级别。 */
   logLevel: 'debug' | 'info' | 'warn'
+  memoryEnabled: boolean
+  memorySpacePrefix: string
+  recentLimit: number
+  injectRecent: number
+  injectMaxChars: number
 }
 
 export const Config: Z<Config> = z.object({
@@ -101,7 +106,12 @@ export const Config: Z<Config> = z.object({
     .description('覆盖模型 provider；留空=宿主默认').volatile(),
   model: z.string().default('')
     .description('覆盖模型 id；留空=宿主默认').volatile(),
-  logLevel: z.union([z.const('debug'), z.const('info'), z.const('warn')]).default('info')
+  logLevel: z.union([z.const('debug'), z.const('info'), z.const('warn')]).default('info'),
+  memoryEnabled: z.boolean().default(true).description('开启群记忆（最近对话缓冲 + mnemon 长期记忆）').volatile(),
+  memorySpacePrefix: z.string().default('napcat-').description('每群一个 mnemon 记忆空间，空间名前缀').volatile(),
+  recentLimit: z.natural().default(200).description('每群保留最近多少条消息').volatile(),
+  injectRecent: z.natural().default(20).description('触发时注入最近多少条对话').volatile(),
+  injectMaxChars: z.natural().default(4000).description('记忆注入总字符上限').volatile()
     .description('日志级别').volatile(),
 }) as unknown as Z<Config>
 
@@ -131,6 +141,11 @@ export const DEFAULTS: Config = {
   provider: '',
   model: '',
   logLevel: 'info',
+  memoryEnabled: true,
+  memorySpacePrefix: 'napcat-',
+  recentLimit: 200,
+  injectRecent: 20,
+  injectMaxChars: 4000,
 }
 
 /** volatile 字段在运行时是 `{ get(): T }` 的稳定引用（cosmokit 的 Volatile）。 */

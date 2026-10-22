@@ -25,6 +25,7 @@ import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, titleFrom, toText } from './text.js'
+import { MemoryStore } from './memory.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
@@ -73,6 +74,8 @@ export interface BridgeOptions {
 }
 
 export class Bridge {
+  /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
+  private readonly mem: MemoryStore
   private readonly chats = new Map<string, ChatState>()
   private readonly bySession = new Map<string, string>()
   /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
@@ -86,6 +89,16 @@ export class Bridge {
   private mentionWarned = false
 
   constructor(private readonly opts: BridgeOptions) {
+    this.mem = new MemoryStore({
+      ctx: opts.ctx,
+      root: normalizePath(join(opts.config.workspacePath || process.cwd(), 'memory')),
+      spacePrefix: opts.config.memorySpacePrefix,
+      recentLimit: opts.config.recentLimit,
+      injectRecent: opts.config.injectRecent,
+      injectMaxChars: opts.config.injectMaxChars,
+      log: opts.log,
+    })
+
     this.refreshPersonas()}
 
   start(): void {
@@ -166,10 +179,45 @@ export class Bridge {
       }
     }
 
+    // 观察：无论是否触发机器人都记进本群最近对话，供"知道刚才在聊什么"
+    const senderNick = String((msg.sender as { nickname?: unknown } | undefined)?.nickname ?? userId)
+    if (this.opts.config.memoryEnabled && ref.kind === 'group') {
+      void this.mem.appendRecent(ref.key, { nick: senderNick, text: rawText })
+    }
+
     const chat = await this.ensureChat(ref)
+
+    // 记忆命令（插件直写，不经过模型）
+    if (this.opts.config.memoryEnabled) {
+      const rememberMatch = /记住[:：]\s*([\s\S]+)$/.exec(rawText)
+      if (rememberMatch !== null && rememberMatch[1] !== undefined && rememberMatch[1].trim() !== '') {
+        const ok = await this.mem.remember(ref.key, rememberMatch[1], chat.agent, ['group:' + ref.id])
+        await this.sendText(chat, '✅ ' + ok)
+        return
+      }
+      if (/^\s*记忆\s*$/.test(rawText.replace(/\[CQ:[^\]]*\]/g, '').trim())) {
+        const recentForQuery = await this.mem.readRecent(ref.key, 10)
+        const recalled = await this.mem.recall(ref.key, recentForQuery.join(' '), chat.agent)
+        await this.sendText(chat, recalled === '' ? '本群还没有长期记忆' : '本群记忆（相关片段）：\n' + recalled)
+        return
+      }
+    }
+
     const media = await this.resolveInboundMedia(msg, chat)
     const textWithoutImageMarkers = rawText.replace(/\[图片\]/g, '').replace(/\n{2,}/g, '\n').trim()
-    const text = [textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n')
+    let memoryBlock = ''
+    if (this.opts.config.memoryEnabled) {
+      try {
+        const recent = await this.mem.readRecent(ref.key)
+        const history = recent.slice(0, Math.max(0, recent.length - 1))
+        const query = history.slice(-5).join(' ')
+        const recalled = query === '' ? '' : await this.mem.recall(ref.key, query, chat.agent)
+        memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent: history, recallText: recalled })
+      } catch (error) {
+        this.opts.log('debug', '记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    const text = [memoryBlock, textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n\n')
     if (text.trim() === '') {
       this.opts.log('debug', '空消息（无文本也没有可下载的媒体），跳过: ' + ref.key)
       return

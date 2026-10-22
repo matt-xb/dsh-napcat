@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
+import { MemoryStore } from '../lib/memory.js'
 import { findKeyword, mentions, parseCq, parsePersonaOverrides, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
@@ -138,4 +139,32 @@ test('文件名模糊匹配', () => {
     (entry) => entry.n,
   )
   assert.equal(ranked.length, 1)
+})
+test('记忆注入：@ 优先 + 预算截断', () => {
+  const store = new MemoryStore({
+    ctx: {},
+    root: 'unused',
+    spacePrefix: 'napcat-',
+    recentLimit: 10,
+    injectRecent: 3,
+    injectMaxChars: 200,
+    log: () => undefined,
+  })
+  const text = store.buildInjection({
+    chatKey: 'group:1',
+    recent: ['12:00 张三: 在聊啥', '12:01 李四: 聊部署'],
+    recallText: '本群规矩：周五发周报',
+    mention: '王五：小灯你看下这个',
+  })
+  assert.match(text, /当前 @你 的人/)
+  assert.match(text, /王五/)
+  assert.match(text, /周五发周报/)
+  const long = store.buildInjection({
+    chatKey: 'group:1',
+    recent: Array.from({ length: 50 }, (_, i) => '12:0' + i + ' 张三: ' + 'x'.repeat(20)),
+    recallText: '',
+    mention: '',
+  })
+  assert.ok(long.length <= 260)
+  assert.match(long, /记忆超预算/)
 })

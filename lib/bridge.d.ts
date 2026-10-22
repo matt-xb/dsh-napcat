@@ -19,6 +19,8 @@ export interface BridgeOptions {
 }
 export declare class Bridge {
     private readonly opts;
+    /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
+    private readonly mem;
     private readonly chats;
     private readonly bySession;
     /** 归档/失效后换用新会话 id 的后缀（下次建会话时带上）。 */
