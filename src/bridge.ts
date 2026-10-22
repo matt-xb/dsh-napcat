@@ -194,17 +194,23 @@ export class Bridge {
     const selectionRef = selection === undefined ? undefined : { current: selection, assembled: undefined }
     // setup：把预设挂进 agent 的 ctx，并安装模型选择（dsh-onebot 同款）
     const presetId = this.opts.config.agentPreset.trim() === '' ? undefined : this.opts.config.agentPreset.trim()
+    const presets = (this.opts.ctx as unknown as { agentPresets?: { mount?(target: unknown, id?: string): Promise<{ id?: string }> } }).agentPresets
+    if (presets?.mount === undefined) this.opts.log('warn', '宿主没有 agentPresets 服务（agent 可能没有工具/loop）')
     const setup = async (agentCtx: unknown): Promise<void> => {
-      const presets = (this.opts.ctx as unknown as { agentPresets?: { mount?(target: unknown, id?: string): Promise<{ id?: string }> } }).agentPresets
       if (presets?.mount !== undefined) {
         try {
           const mounted = await presets.mount(agentCtx, presetId)
-          this.opts.log('debug', '会话已挂预设: ' + String(mounted?.id ?? presetId ?? 'default'))
+          this.opts.log('info', 'agent 已挂预设: ' + String(mounted?.id ?? presetId ?? 'default'))
         } catch (error) {
-          this.opts.log('warn', '挂预设失败（工具退回全局层）: ' + describe(error))
+          this.opts.log('warn', '挂预设失败: ' + describe(error))
         }
       }
-      if (selectionRef !== undefined) installModelSelection(agentCtx as never, selectionRef as never)
+      if (selectionRef === undefined) {
+        this.opts.log('warn', '没有可用模型（agentDefaultModel 缺失或未选择），这一轮可能空跑')
+      } else {
+        installModelSelection(agentCtx as never, selectionRef as never)
+        this.opts.log('info', 'agent 模型: ' + selectionRef.current.provider + '/' + selectionRef.current.model)
+      }
     }
     if (agentOptions.model === undefined) {
       this.opts.log('warn', '没有可用的模型：在「设置 → NapCat」里填 provider/model，或先给 DSH 配一个默认模型')
@@ -242,6 +248,7 @@ export class Bridge {
       handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
     }
 
+    this.opts.log('info', 'agent 就绪检查: preset=' + String(presetId ?? '(default)') + ' model=' + String(agentOptions.provider ?? '?') + '/' + String(agentOptions.model ?? '?'))
     // 照 dsh-onebot：create/resume 后必须等 agent 就绪（whenIdle）再投递消息，
     // 否则 followup 落不到正在初始化的 agent 上，表现为"消息进去了但这一轮不跑"
     try {
