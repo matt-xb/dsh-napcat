@@ -35,6 +35,10 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    /** 宿主会话 id → QQ 会话 key（工具省略 chat_id 时用来定位当前会话）。 */
+    keyForSession(sessionId: string): string | undefined;
+    /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
+    private resolveInboundMedia;
     /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */
     private readonly pendingChats;
     private ensureChat;

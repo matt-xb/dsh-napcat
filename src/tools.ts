@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 import type { LogLevel, OneBotConnection } from './onebot.js'
+import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, localToBase64Url, sourceToBase64Url } from './media.js'
 import { splitText } from './text.js'
 import type { ObFriendInfo, ObGroupInfo } from './types.js'
 
@@ -39,7 +40,46 @@ function parseChatId(raw: string): { kind: 'private' | 'group'; id: string } {
   return { kind, id: match[2].trim() }
 }
 
-export function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void): void {
+export interface ToolDeps {
+  /** 会话 id → 当前 QQ 会话（省略 chat_id 时用） */
+  keyForSession?: (sessionId: string) => string | undefined
+  maxImageBytes?: number
+  maxFileBytes?: number
+}
+
+export function registerTools(
+  ctx: Context,
+  conn: OneBotConnection,
+  log: (level: LogLevel, message: string) => void,
+  deps: ToolDeps = {},
+): void {
+  const keyForSession = deps.keyForSession
+  const maxImageBytes = deps.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
+  const maxFileBytes = deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
+
+  /** 解析目标会话：显式 chat_id 优先，否则用当前 agent 的会话。 */
+  const resolveChat = (explicit: unknown, exec: unknown): { kind: 'private' | 'group'; id: string } => {
+    const raw = typeof explicit === 'string' && explicit.trim() !== '' ? explicit.trim() : undefined
+    if (raw !== undefined) return parseChatId(raw)
+    const sessionId = (exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id
+    const derived = sessionId === undefined || keyForSession === undefined ? undefined : keyForSession(String(sessionId))
+    if (derived === undefined || derived === '') {
+      throw new Error('需要 chat_id（形如 private:123456 或 group:789012）：当前调用不在某个 QQ 会话里')
+    }
+    return parseChatId(derived)
+  }
+
+  const sendSegments = async (
+    target: { kind: 'private' | 'group'; id: string },
+    message: Array<Record<string, unknown>>,
+  ): Promise<string | undefined> => {
+    const result = await conn.call<{ message_id?: number | string }>('send_msg', {
+      message_type: target.kind,
+      ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
+      message,
+    })
+    return result?.message_id === undefined ? undefined : String(result.message_id)
+  }
   ctx.tools.register(defineTool({
     name: 'napcat_send_message',
     description: '主动给一个 QQ 会话发文本消息（不需要对方先说话）。chat_id 形如 private:123456 或 group:789012。超长文本会自动分段。',
@@ -138,4 +178,68 @@ export function registerTools(ctx: Context, conn: OneBotConnection, log: (level:
       return JSON.stringify(data ?? null, null, 2)
     },
   }))
-}
+
+  ctx.tools.register(defineTool({
+    name: 'napcat_send_image',
+    description: '给 QQ 会话发图片（本地路径或 http(s) 链接；自动转 base64，NapCat 在远端也能发）。省略 chat_id 时发到当前会话。',
+    parameters: {
+      source: { type: 'string', required: true, description: '本地图片绝对路径，或 http(s) 图片链接' },
+      chat_id: { type: 'string', description: '目标会话：private:<QQ号> 或 group:<群号>；省略=当前会话' },
+      caption: { type: 'string', description: '可选：图片前的文字说明' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { source: string; chat_id?: string; caption?: string }
+      const target = resolveChat(input.chat_id, exec)
+      const image = await sourceToBase64Url(input.source, maxImageBytes)
+      const message: Array<Record<string, unknown>> = []
+      if (typeof input.caption === 'string' && input.caption.trim() !== '') {
+        message.push({ type: 'text', data: { text: input.caption.trim() } })
+      }
+      message.push({ type: 'image', data: { file: image.url } })
+      const id = await sendSegments(target, message)
+      log('info', '工具发图片 ' + String(target.id) + ' (' + Math.round(image.bytes / 1024) + 'KB)')
+      return '已发送图片 ' + image.name + '（' + Math.round(image.bytes / 1024) + 'KB）' + (id === undefined ? '' : '，message_id: ' + id)
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'napcat_send_file',
+    description: '给 QQ 会话发文件（本地路径；自动转 base64 走上传接口）。省略 chat_id 时发到当前会话。',
+    parameters: {
+      path: { type: 'string', required: true, description: '本地文件绝对路径' },
+      chat_id: { type: 'string', description: '目标会话：private:<QQ号> 或 group:<群号>；省略=当前会话' },
+      name: { type: 'string', description: '可选：对方看到的文件名（默认用原文件名）' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { path: string; chat_id?: string; name?: string }
+      const target = resolveChat(input.chat_id, exec)
+      const file = await localToBase64Url(input.path, maxFileBytes)
+      const displayName = typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : file.name
+      const errors: string[] = []
+      // ① 先试文件消息段（部分 NapCat 版本支持 base64）
+      try {
+        const id = await sendSegments(target, [{ type: 'file', data: { file: file.url, name: displayName } }])
+        log('info', '工具发文件（file 段）' + String(target.id) + ' (' + Math.round(file.bytes / 1024) + 'KB)')
+        return '已发送文件 ' + displayName + '（' + Math.round(file.bytes / 1024) + 'KB）' + (id === undefined ? '' : '，message_id: ' + id)
+      } catch (error) {
+        errors.push('file 段失败: ' + (error instanceof Error ? error.message : String(error)))
+      }
+      // ② 退回群文件/私聊文件上传接口
+      try {
+        if (target.kind === 'group') {
+          await conn.call('upload_group_file', { group_id: target.id, file: file.url, name: displayName })
+        } else {
+          await conn.call('upload_private_file', { user_id: target.id, file: file.url, name: displayName })
+        }
+        log('info', '工具发文件（upload）' + String(target.id) + ' (' + Math.round(file.bytes / 1024) + 'KB)')
+        return '已通过上传接口发送文件 ' + displayName + '（' + Math.round(file.bytes / 1024) + 'KB）'
+      } catch (error) {
+        errors.push('上传接口失败: ' + (error instanceof Error ? error.message : String(error)))
+      }
+      throw new Error('发送文件失败：' + errors.join('；') + '（NapCat 远端时文件消息支持有限，可先试发图片或将文件放到公共可访问 URL）')
+    },
+  }))}

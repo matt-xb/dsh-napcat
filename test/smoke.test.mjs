@@ -3,6 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
 import { findKeyword, mentions, parseCq, parsePersonaOverrides, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
@@ -118,4 +119,12 @@ test('titleFrom 生成 MM-DD HH:mm', () => {
   const at = new Date(2026, 9, 22, 9, 5)
   assert.equal(titleFrom('小灯讲个笑话', at), '10-22 09:05')
   assert.equal(titleFrom('', new Date(2026, 0, 3, 23, 59)), '01-03 23:59')
+})
+test('media 小工具', () => {
+  assert.equal(isHttpUrl('https://a/b.png'), true)
+  assert.equal(isHttpUrl('C:\\a\\b.png'), false)
+  assert.equal(safeName('../../etc/passwd', 'x'), 'passwd')
+  assert.equal(safeName('a/b:c*d.png', 'x'), 'b_c_d.png')
+  assert.equal(nameFromRef('file:///data/1234.jpg', 'i.png'), '1234.jpg')
+  assert.equal(base64UrlToBuffer('base64://aGk=').toString('utf8'), 'hi')
 })

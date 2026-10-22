@@ -67,7 +67,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     log('warn', 'forward 模式下 accessToken 为空：NapCat 若配了 token，连接会被拒')
   }
 
-  registerTools(ctx, conn, log)
+  registerTools(ctx, conn, log, { keyForSession: sessionId => bridge.keyForSession(sessionId) })
 
   // 群/人性格：照 dsh-im 的动态提示词上下文（按 sessionId 注入额外人设）
   ctx.inject(['systemPrompt'], promptCtx => {
