@@ -177,3 +177,27 @@ export function titleFrom(text: string, now: Date = new Date()): string {
   const time = pad(now.getHours()) + ':' + pad(now.getMinutes())
   return date + ' ' + time
 }
+/** 文件名模糊匹配打分（0 = 不匹配）。用户常只记得一部分名字。 */
+export function scoreFileName(name: string, query: string): number {
+  const norm = (s: string): string => s.toLowerCase().replace(/[\s_\-—–]+/g, '')
+  const a = norm(name)
+  const q = norm(query)
+  if (q === '') return 0
+  if (a === q) return 100
+  const stem = a.replace(/\.[a-z0-9]{1,8}$/, '')
+  const qStem = q.replace(/\.[a-z0-9]{1,8}$/, '')
+  if (stem === qStem) return 90
+  if (a.startsWith(q) || stem.startsWith(qStem)) return 80
+  if (a.includes(q) || stem.includes(qStem)) return 60
+  const tokens = query.toLowerCase().split(/[\s_\-—–]+/).filter(part => part !== '')
+  if (tokens.length > 1 && tokens.every(part => a.includes(norm(part)))) return 40
+  return 0
+}
+
+/** 按模糊打分排序候选（只返回 score>0）。 */
+export function rankByFileName<T>(items: readonly T[], query: string, nameOf: (item: T) => string): Array<{ item: T; score: number }> {
+  return items
+    .map(item => ({ item, score: scoreFileName(nameOf(item), query) }))
+    .filter(entry => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+}

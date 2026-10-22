@@ -4,7 +4,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, localToBase64Url, sourceToBase64Url } from './media.js'
+import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, downloadToFile, ensureTempDir, localToBase64Url, sourceToBase64Url } from './media.js'
+import { rankByFileName } from './text.js'
 import { splitText } from './text.js'
 import type { ObFriendInfo, ObGroupInfo } from './types.js'
 
@@ -45,6 +46,8 @@ export interface ToolDeps {
   keyForSession?: (sessionId: string) => string | undefined
   maxImageBytes?: number
   maxFileBytes?: number
+  /** 允许操作的群号（群文件工具用），省略=不限制 */
+  allowedGroups?: () => readonly string[]
 }
 
 export function registerTools(
@@ -241,5 +244,122 @@ export function registerTools(
         errors.push('上传接口失败: ' + (error instanceof Error ? error.message : String(error)))
       }
       throw new Error('发送文件失败：' + errors.join('；') + '（NapCat 远端时文件消息支持有限，可先试发图片或将文件放到公共可访问 URL）')
+    },
+  }))
+  // ── 群文件 ────────────────────────────────────────────────────────────────
+  interface ObGroupFile {
+    file_id?: string
+    file_name?: string
+    file_size?: number
+    busid?: number
+    upload_time?: number
+  }
+
+  const allowedGroups = deps.allowedGroups
+  const resolveGroup = (explicit: unknown, exec: unknown): string => {
+    const raw = typeof explicit === 'string' && explicit.trim() !== '' ? explicit.trim() : undefined
+    let groupId = raw
+    if (groupId === undefined) {
+      const sessionId = (exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id
+      const derived = sessionId === undefined || keyForSession === undefined ? undefined : keyForSession(String(sessionId))
+      if (derived !== undefined && derived.startsWith('group:')) groupId = derived.slice('group:'.length)
+    }
+    if (groupId === undefined || groupId === '') throw new Error('需要 group_id（当前不在群会话里就请显式传群号）')
+    const allowed = allowedGroups?.() ?? []
+    if (allowed.length > 0 && !allowed.includes(groupId)) {
+      throw new Error('群 ' + groupId + ' 不在 groupAllowFrom 白名单里，拒绝操作')
+    }
+    return groupId
+  }
+
+  const listGroupFiles = async (groupId: string): Promise<ObGroupFile[]> => {
+    const data = await conn.call<{ files?: ObGroupFile[] }>('get_group_file_list', { group_id: groupId })
+    return Array.isArray(data?.files) ? data.files : []
+  }
+
+  const sizeText = (bytes: number | undefined): string => {
+    const value = bytes ?? 0
+    if (value >= 1024 * 1024) return Math.round(value / 1024 / 1024) + 'MB'
+    return Math.max(1, Math.round(value / 1024)) + 'KB'
+  }
+
+  ctx.tools.register(defineTool({
+    name: 'napcat_list_group_files',
+    description: '列出 QQ 群文件（可选按关键字模糊过滤）。用于"看看群文件里有哪些/有没有 XX 文件"。',
+    parameters: {
+      group_id: { type: 'string', description: '群号；省略=当前群会话' },
+      keyword: { type: 'string', description: '可选：按文件名模糊过滤' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { group_id?: string; keyword?: string }
+      const groupId = resolveGroup(input.group_id, exec)
+      const files = await listGroupFiles(groupId)
+      if (files.length === 0) return '群 ' + groupId + ' 的文件列表是空的（或 NapCat 没返回）'
+      const keyword = typeof input.keyword === 'string' && input.keyword.trim() !== '' ? input.keyword.trim() : ''
+      const chosen = keyword === ''
+        ? files.map(file => ({ item: file, score: 1 }))
+        : rankByFileName(files, keyword, file => String(file.file_name ?? ''))
+      if (chosen.length === 0) {
+        return '群 ' + groupId + ' 里没有匹配「' + keyword + '」的文件；现有文件：\n' + files.slice(0, 15).map((file, index) => (index + 1) + '. ' + String(file.file_name ?? '?')).join('\n')
+      }
+      const lines = chosen.slice(0, 20).map((entry, index) => {
+        const file = entry.item
+        return (index + 1) + '. ' + String(file.file_name ?? '?') + '  (' + sizeText(file.file_size) + ')  file_id=' + String(file.file_id ?? '')
+      })
+      return '群 ' + groupId + ' 匹配到 ' + chosen.length + ' 个文件：\n' + lines.join('\n')
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'napcat_fetch_group_file',
+    description: '把 QQ 群文件下载到本地供阅读。可用 file_id 精确定位，或给（可能不完整的）文件名做模糊匹配；匹配到多个会退回候选清单。',
+    parameters: {
+      name: { type: 'string', description: '文件名（可以只写一部分，会模糊匹配）' },
+      file_id: { type: 'string', description: '精确的 file_id（从 napcat_list_group_files 拿到）' },
+      group_id: { type: 'string', description: '群号；省略=当前群会话' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { name?: string; file_id?: string; group_id?: string }
+      const groupId = resolveGroup(input.group_id, exec)
+      const files = await listGroupFiles(groupId)
+      if (files.length === 0) throw new Error('群 ' + groupId + ' 的文件列表为空，拿不到要下载的文件')
+      let target: ObGroupFile | undefined
+      if (typeof input.file_id === 'string' && input.file_id.trim() !== '') {
+        const wantedId = input.file_id.trim()
+        target = files.find(file => String(file.file_id ?? '') === wantedId)
+        if (target === undefined) throw new Error('群 ' + groupId + ' 里没有 file_id=' + input.file_id)
+      } else {
+        const query = typeof input.name === 'string' ? input.name.trim() : ''
+        if (query === '') throw new Error('请给 name（可用部分文件名）或 file_id')
+        const ranked = rankByFileName(files, query, file => String(file.file_name ?? ''))
+        if (ranked.length === 0) {
+          throw new Error('群 ' + groupId + ' 里没有匹配「' + query + '」的文件；现有：' + files.slice(0, 10).map(file => String(file.file_name ?? '?')).join('、'))
+        }
+        if (ranked.length > 1 && (ranked[1]?.score ?? 0) === ranked[0]?.score) {
+          const candidates = ranked.filter(entry => entry.score === ranked[0]?.score).slice(0, 8)
+          return '「' + query + '」匹配到多个同名/近似文件，请指定 file_id：\n' + candidates.map((entry, index) => (index + 1) + '. ' + String(entry.item.file_name ?? '?') + '  file_id=' + String(entry.item.file_id ?? '')).join('\n')
+        }
+        target = ranked[0]?.item
+      }
+      if (target === undefined) throw new Error('没能定位到目标文件')
+      const size = target.file_size ?? 0
+      if (size > maxFileBytes) throw new Error('文件太大（' + sizeText(size) + '，上限 ' + sizeText(maxFileBytes) + '）')
+      const urlData = await conn.call<{ url?: string }>('get_group_file_url', {
+        group_id: groupId,
+        file_id: String(target.file_id ?? ''),
+        busid: target.busid ?? 0,
+      })
+      const url = urlData?.url
+      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+        throw new Error('get_group_file_url 没返回可下载的 http 链接（NapCat 可能只给了本机路径）')
+      }
+      const dir = await ensureTempDir()
+      const saved = await downloadToFile(url, dir, String(target.file_name ?? 'group-file'), maxFileBytes)
+      const fileName = String(target.file_name ?? 'group-file')
+      return '已下载群文件「' + fileName + '」（' + sizeText(saved.bytes) + '）\n[文件: ' + saved.path + ']'
     },
   }))}

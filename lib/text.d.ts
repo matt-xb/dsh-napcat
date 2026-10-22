@@ -30,3 +30,10 @@ export declare function shortHash(text: string): string;
 export declare function parsePersonaOverrides(raw: string): Map<string, string>;
 /** 会话标题：`MM-DD HH:mm`（本地时间；内容容易乱，所以只标时间）。 */
 export declare function titleFrom(text: string, now?: Date): string;
+/** 文件名模糊匹配打分（0 = 不匹配）。用户常只记得一部分名字。 */
+export declare function scoreFileName(name: string, query: string): number;
+/** 按模糊打分排序候选（只返回 score>0）。 */
+export declare function rankByFileName<T>(items: readonly T[], query: string, nameOf: (item: T) => string): Array<{
+    item: T;
+    score: number;
+}>;

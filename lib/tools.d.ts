@@ -6,5 +6,7 @@ export interface ToolDeps {
     keyForSession?: (sessionId: string) => string | undefined;
     maxImageBytes?: number;
     maxFileBytes?: number;
+    /** 允许操作的群号（群文件工具用），省略=不限制 */
+    allowedGroups?: () => readonly string[];
 }
 export declare function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void, deps?: ToolDeps): void;

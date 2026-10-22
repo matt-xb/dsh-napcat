@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
-import { findKeyword, mentions, parseCq, parsePersonaOverrides, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
+import { findKeyword, mentions, parseCq, parsePersonaOverrides, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
 const config = {
@@ -127,4 +127,15 @@ test('media 小工具', () => {
   assert.equal(safeName('a/b:c*d.png', 'x'), 'b_c_d.png')
   assert.equal(nameFromRef('file:///data/1234.jpg', 'i.png'), '1234.jpg')
   assert.equal(base64UrlToBuffer('base64://aGk=').toString('utf8'), 'hi')
+})
+test('文件名模糊匹配', () => {
+  assert.equal(scoreFileName('自然，这是一部手稿.docx', '手稿'), 60)
+  assert.equal(scoreFileName('Natural Draft.DOCX', 'natural draft'), 90)
+  assert.equal(scoreFileName('abc.pdf', 'zzz'), 0)
+  const ranked = rankByFileName(
+    [{ n: '自然，这是一部手稿.docx' }, { n: '无关.pdf' }],
+    '手稿',
+    (entry) => entry.n,
+  )
+  assert.equal(ranked.length, 1)
 })
