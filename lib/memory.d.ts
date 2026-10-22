@@ -27,6 +27,8 @@ export declare class MemoryStore {
     private ensureDir;
     /** 用注册表直接调工具（插件掌握时机，不依赖模型）。 */
     private callTool;
+    /** 把工具原始返回写进 _debug.log（排查解析问题用）。 */
+    private dumpRaw;
     /** 记忆相关失败：warn 到控制台 + 追加到 memory/_debug.log，便于事后定位。 */
     private reportFailure;
     /** 拿到（或创建）本聊天的 mnemon 空间 id；失败返回 undefined（自动退化为文件记忆）。 */

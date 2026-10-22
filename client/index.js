@@ -60,6 +60,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'recentLimit', label: '每群保留最近消息条数', kind: 'number' },
         { key: 'injectRecent', label: '每次触发注入最近对话条数', kind: 'number' },
         { key: 'injectMaxChars', label: '记忆注入字符上限', kind: 'number' },
+        { key: 'warmupHistory', label: '预热条数：缓冲不足就拉历史（0=关闭）', kind: 'number' },
+        { key: 'warmupStaleMinutes', label: '预热新鲜度：最新一条超过多少分钟视为过期', kind: 'number' },
       ]
 
       const NS = 'dsh-napcat'
