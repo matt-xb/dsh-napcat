@@ -12,6 +12,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 /** 宿主 AgentRegistry.create 接受的模型选项（避免自己猜 ReasoningEffortId 的品牌类型）。 */
 type AgentOptions = NonNullable<NonNullable<Parameters<AgentRegistry['create']>[0]>['agentOptions']>
@@ -174,17 +175,34 @@ export class Bridge {
     const meta: { cwd: string; agentPreset?: string } = { cwd }
     if (this.opts.config.agentPreset !== '') meta.agentPreset = this.opts.config.agentPreset
     const agentOptions: AgentOptions = {}
+    // 照 dsh-onebot：优先用宿主默认模型服务；插件配置里的 provider/model 覆盖它
+    const defaultModel = (this.opts.ctx as unknown as {
+      agentDefaultModel?: { currentSelection?(): { provider?: string; model?: string; reasoningEffort?: string } | undefined }
+    }).agentDefaultModel
+    let selection = defaultModel?.currentSelection?.()
+    if (selection !== undefined) {
+      agentOptions.provider = selection.provider
+      agentOptions.model = selection.model
+    }
     if (this.opts.config.provider !== '') agentOptions.provider = this.opts.config.provider
     if (this.opts.config.model !== '') agentOptions.model = this.opts.config.model
-    // 没显式配置模型时用宿主的默认模型（否则 agent 的 {{model}} 为空，整轮会报错）
-    if (agentOptions.provider === undefined || agentOptions.model === undefined) {
-      const fallback = (this.opts.ctx as unknown as {
-        get?(name: string): { currentSelection?(): { provider?: string; model?: string; reasoningEffort?: string } } | undefined
-      }).get?.('agentDefaultModel')
-      const selection = fallback?.currentSelection?.()
-      if (agentOptions.provider === undefined && selection?.provider !== undefined) agentOptions.provider = selection.provider
-      if (agentOptions.model === undefined && selection?.model !== undefined) agentOptions.model = selection.model
-      if (agentOptions.reasoningEffort === undefined && selection?.reasoningEffort !== undefined) agentOptions.reasoningEffort = selection.reasoningEffort as AgentOptions['reasoningEffort']
+    if (agentOptions.provider !== undefined && agentOptions.model !== undefined) {
+      selection = { provider: agentOptions.provider, model: agentOptions.model, ...(selection?.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort }) }
+    }
+    const selectionRef = selection === undefined ? undefined : { current: selection, assembled: undefined }
+    // setup：把预设挂进 agent 的 ctx，并安装模型选择（dsh-onebot 同款）
+    const presetId = this.opts.config.agentPreset.trim() === '' ? undefined : this.opts.config.agentPreset.trim()
+    const setup = async (agentCtx: unknown): Promise<void> => {
+      const presets = (this.opts.ctx as unknown as { agentPresets?: { mount?(target: unknown, id?: string): Promise<{ id?: string }> } }).agentPresets
+      if (presets?.mount !== undefined) {
+        try {
+          const mounted = await presets.mount(agentCtx, presetId)
+          this.opts.log('debug', '会话已挂预设: ' + String(mounted?.id ?? presetId ?? 'default'))
+        } catch (error) {
+          this.opts.log('warn', '挂预设失败（工具退回全局层）: ' + describe(error))
+        }
+      }
+      if (selectionRef !== undefined) installModelSelection(agentCtx as never, selectionRef as never)
     }
     if (agentOptions.model === undefined) {
       this.opts.log('warn', '没有可用的模型：在「设置 → NapCat」里填 provider/model，或先给 DSH 配一个默认模型')
@@ -207,19 +225,19 @@ export class Bridge {
     if (exists) {
       try {
         created = false
-        handle = await agents.resume({ resumeSessionId: sessionId, agentOptions })
+        handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
       } catch (error) {
         this.opts.log('warn', '预检到日志但 resume 失败，改 create: ' + describe(error))
         created = true
         exists = false
-        handle = await agents.create({ sessionId, meta, agentOptions })
+        handle = await agents.create({ sessionId, meta, agentOptions, setup })
       }
     } else try {
-      handle = await agents.create({ sessionId, meta, agentOptions })
+      handle = await agents.create({ sessionId, meta, agentOptions, setup })
     } catch (error) {
       this.opts.log('warn', '创建会话失败（多半是同 id 已有持久化日志），改用 resume: ' + describe(error))
       created = false
-      handle = await agents.resume({ resumeSessionId: sessionId, agentOptions })
+      handle = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
     }
 
     // 照 dsh-onebot：create/resume 后必须等 agent 就绪（whenIdle）再投递消息，
