@@ -35,6 +35,7 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    private handleEventInner;
     /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
     private debugLog;
     /** 宿主会话 id → QQ 会话 key（工具省略 chat_id 时用来定位当前会话）。 */

@@ -115,6 +115,22 @@ export class Bridge {
 
   /** 一条 OneBot 事件进站。 */
   async handleEvent(event: ObEvent): Promise<void> {
+    try {
+      await this.handleEventInner(event)
+    } catch (error) {
+      let cwd: string | undefined
+      try {
+        const ref = chatRefOf(event as ObMessageEvent)
+        if (ref !== undefined) cwd = join(this.opts.config.workspacePath || process.cwd(), 'napcat', (ref.kind === 'group' ? 'group-' : 'private-') + ref.id)
+      } catch {
+        // 取不到就写默认位置
+      }
+      this.debugLog(cwd, '出站异常: ' + describe(error))
+      throw error
+    }
+  }
+
+  private async handleEventInner(event: ObEvent): Promise<void> {
     if (this.stopped) return
     if (event.post_type !== 'message') return
     const msg = event as ObMessageEvent
@@ -170,7 +186,7 @@ export class Bridge {
   /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
   private debugLog(cwd: string | undefined, note: string): void {
     try {
-      const dir = cwd ?? process.cwd()
+      const dir = cwd ?? join(this.opts.config.workspacePath || process.cwd(), 'napcat')
       void appendFile(join(dir, 'napcat-inbox', '_image-debug.log'),
         new Date().toISOString() + ' v0.3.6 ' + note + '\n').catch(() => undefined)
     } catch {
@@ -514,6 +530,7 @@ export class Bridge {
   }
 
   private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = []): void {
+    this.debugLog(chat.cwd, 'dispatch 进入 ref=' + chat.ref.key + ' text=' + text.length + '字 blocks=' + blocks.length + ' parts=' + parts.length)
     chat.buffer = []
     chat.lastText = text
     // 每次投递前重新断言「免审批」：用户在 GUI 换过权限档位也能继续工作
