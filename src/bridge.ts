@@ -52,6 +52,8 @@ interface ChatState {
   dispatchedAt?: number
   /** 这个会话最近一次收到任何事件的时刻。 */
   lastEventAt?: number
+  /** 最近一次投递给模型的文本（ENOENT 自愈时重投用）。 */
+  lastText?: string
   /** 这条消息是否已经重试过一次。 */
   retried?: boolean
 }
@@ -337,6 +339,7 @@ export class Bridge {
 
   private dispatch(chat: ChatState, text: string): void {
     chat.buffer = []
+    chat.lastText = text
     let pending: unknown
     try {
       pending = chat.agent.followup(createUserMessage({
@@ -393,7 +396,7 @@ export class Bridge {
   }
 
   /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */
-  private async recoverChat(chat: ChatState, error: unknown): Promise<void> {
+  private async recoverChat(chat: ChatState, error: unknown, notify = true): Promise<void> {
     if (chat.startTimer !== undefined) {
       clearTimeout(chat.startTimer)
       chat.startTimer = undefined
@@ -409,7 +412,7 @@ export class Bridge {
     } catch {
       // agent 可能已被宿主释放，忽略
     }
-    await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（会话状态已重置，再发一条会重新建会话）')
+    if (notify) await this.sendText(chat, '⚠️ 消息没送进模型：' + describe(error) + '\n（会话状态已重置，再发一条会重新建会话）')
   }
   // ── 出站 ───────────────────────────────────────────────────────────────────
 
@@ -439,6 +442,13 @@ export class Bridge {
         void this.sendText(chat, text)
       } else if (reason.kind === 'error') {
         void this.sendText(chat, '⚠️ 本轮出错：' + reason.error.message)
+          // 会话存储文件被外部删掉时会 ENOENT：丢状态 + 换新 id，下一条消息自然新建日志
+          if (/ENOENT|no such file/i.test(reason.error.message)) {
+            this.opts.log('warn', '会话存储文件丢失，丢弃会话状态并用新会话重投: ' + chat.ref.key)
+            const text = chat.lastText
+            if (text !== undefined && text !== '') void this.recoverAndRetry(chat, text)
+            else void this.recoverChat(chat, reason.error, false)
+          }
       }
       return
     }
