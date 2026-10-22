@@ -53,6 +53,7 @@ export interface Config {
   /** 日志级别。 */
   logLevel: 'debug' | 'info' | 'warn'
   memoryEnabled: boolean
+  memoryBackend: 'mnemon' | 'file'
   memorySpacePrefix: string
   recentLimit: number
   injectRecent: number
@@ -107,7 +108,8 @@ export const Config: Z<Config> = z.object({
   model: z.string().default('')
     .description('覆盖模型 id；留空=宿主默认').volatile(),
   logLevel: z.union([z.const('debug'), z.const('info'), z.const('warn')]).default('info'),
-  memoryEnabled: z.boolean().default(true).description('开启群记忆（最近对话缓冲 + mnemon 长期记忆）').volatile(),
+  memoryEnabled: z.boolean().default(true).description('开启群记忆（最近对话缓冲 + 长期记忆）').volatile(),
+  memoryBackend: z.union([z.const('mnemon'), z.const('file')]).default('mnemon').description('长期记忆后端：mnemon=每群一个记忆空间；file=完全本地文件，不碰 mnemon').volatile(),
   memorySpacePrefix: z.string().default('napcat-').description('每群一个 mnemon 记忆空间，空间名前缀').volatile(),
   recentLimit: z.natural().default(200).description('每群保留最近多少条消息').volatile(),
   injectRecent: z.natural().default(20).description('触发时注入最近多少条对话').volatile(),
@@ -142,6 +144,7 @@ export const DEFAULTS: Config = {
   model: '',
   logLevel: 'info',
   memoryEnabled: true,
+  memoryBackend: 'mnemon',
   memorySpacePrefix: 'napcat-',
   recentLimit: 200,
   injectRecent: 20,

@@ -54,6 +54,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'provider', label: '模型 provider（留空=宿主默认）', kind: 'text' },
         { key: 'model', label: '模型 id（留空=宿主默认）', kind: 'text' },
         { key: 'logLevel', label: '日志级别', kind: 'select', options: [['info', 'info'], ['debug', 'debug'], ['warn', 'warn']] },
+        { key: 'memoryEnabled', label: '群记忆：开启（最近对话缓冲 + 长期记忆）', kind: 'boolean' },
+        { key: 'memoryBackend', label: '长期记忆后端', kind: 'select', options: [['mnemon', 'mnemon：每群一个记忆空间'], ['file', 'file：纯本地文件，不碰 mnemon']] },
+        { key: 'memorySpacePrefix', label: '记忆空间名前缀（mnemon 模式）', kind: 'text', placeholder: 'napcat-' },
+        { key: 'recentLimit', label: '每群保留最近消息条数', kind: 'number' },
+        { key: 'injectRecent', label: '每次触发注入最近对话条数', kind: 'number' },
+        { key: 'injectMaxChars', label: '记忆注入字符上限', kind: 'number' },
       ]
 
       const NS = 'dsh-napcat'

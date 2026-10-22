@@ -93,6 +93,7 @@ export class Bridge {
       ctx: opts.ctx,
       root: normalizePath(join(opts.config.workspacePath || process.cwd(), 'memory')),
       spacePrefix: opts.config.memorySpacePrefix,
+      backend: opts.config.memoryBackend,
       recentLimit: opts.config.recentLimit,
       injectRecent: opts.config.injectRecent,
       injectMaxChars: opts.config.injectMaxChars,

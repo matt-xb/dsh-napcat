@@ -50,6 +50,7 @@ export interface Config {
     /** 日志级别。 */
     logLevel: 'debug' | 'info' | 'warn';
     memoryEnabled: boolean;
+    memoryBackend: 'mnemon' | 'file';
     memorySpacePrefix: string;
     recentLimit: number;
     injectRecent: number;

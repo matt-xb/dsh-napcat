@@ -6,6 +6,8 @@ export interface MemoryOptions {
     root: string;
     /** mnemon 空间名前缀 */
     spacePrefix: string;
+    /** 长期记忆后端：mnemon（每群一空间）或 file（纯本地） */
+    backend: 'mnemon' | 'file';
     /** recent.jsonl 保留条数 */
     recentLimit: number;
     /** 注入最近多少条对话 */

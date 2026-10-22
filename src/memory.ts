@@ -11,6 +11,8 @@ export interface MemoryOptions {
   root: string
   /** mnemon 空间名前缀 */
   spacePrefix: string
+  /** 长期记忆后端：mnemon（每群一空间）或 file（纯本地） */
+  backend: 'mnemon' | 'file'
   /** recent.jsonl 保留条数 */
   recentLimit: number
   /** 注入最近多少条对话 */
@@ -45,6 +47,40 @@ function collectText(value: unknown, depth = 0): string {
   return ''
 }
 
+/** 从工具返回值里递归找 memoryBodyId / id（先试 JSON，再退回正则）。 */
+function findId(raw: string): string | undefined {
+  const walk = (value: unknown, depth = 0): string | undefined => {
+    if (depth > 6 || value === null || value === undefined) return undefined
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = walk(item, depth + 1)
+        if (found !== undefined) return found
+      }
+      return undefined
+    }
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>
+      for (const key of ['memoryBodyId', 'memoryBody', 'id']) {
+        const candidate = record[key]
+        if (typeof candidate === 'string' && candidate !== '') return candidate
+      }
+      for (const nested of Object.values(record)) {
+        const found = walk(nested, depth + 1)
+        if (found !== undefined) return found
+      }
+    }
+    return undefined
+  }
+  try {
+    const found = walk(JSON.parse(raw))
+    if (found !== undefined) return found
+  } catch {
+    // 不是 JSON，退回正则
+  }
+  const match = /"memoryBodyId"\s*:\s*"([^"]+)"/.exec(raw) ?? /"id"\s*:\s*"([^"]+)"/.exec(raw)
+  return match?.[1]
+}
+
 export class MemoryStore {
   constructor(private readonly opts: MemoryOptions) {}
 
@@ -74,6 +110,7 @@ export class MemoryStore {
 
   /** 拿到（或创建）本聊天的 mnemon 空间 id；失败返回 undefined（自动退化为文件记忆）。 */
   async ensureSpace(chatKey: string, agent: unknown): Promise<string | undefined> {
+    if (this.opts.backend === 'file') return undefined
     try {
       const dir = await this.ensureDir(chatKey)
       const cachePath = join(dir, SPACE_FILE)
@@ -88,8 +125,7 @@ export class MemoryStore {
         name,
         description: 'QQ ' + chatKey + ' 的长期记忆（dsh-napcat 自动维护）',
       }, agent)
-      const match = /"memoryBodyId"\s*:\s*"([^"]+)"/.exec(created) ?? /"id"\s*:\s*"([^"]+)"/.exec(created)
-      const id = match?.[1]
+      const id = findId(created)
       if (id === undefined || id === '') return undefined
       await writeFile(cachePath, JSON.stringify({ name, id }, null, 2), 'utf8')
       this.opts.log('info', '已创建记忆空间: ' + name + ' (' + id + ')')
