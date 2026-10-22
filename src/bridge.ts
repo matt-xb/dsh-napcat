@@ -199,6 +199,21 @@ export class Bridge {
   /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
   private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> }> {
     const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file')
+    // 引用回复：被引用的那条消息里的图/文件不在当前 segments 里，用 get_msg 取回来
+    const replySeg = segmentsOf(msg.message).find(seg => seg.type === 'reply')
+    const replyId = replySeg === undefined ? '' : String((replySeg.data as { id?: unknown } | undefined)?.id ?? '')
+    if (replyId !== '') {
+      try {
+        const quoted = await this.opts.conn.call<{ message?: unknown }>('get_msg', { message_id: replyId })
+        const quotedMedia = segmentsOf(quoted?.message as never).filter(seg => seg.type === 'image' || seg.type === 'file')
+        if (quotedMedia.length > 0) {
+          media.push(...quotedMedia)
+          this.debugLog(undefined, '引用消息带媒体 n=' + quotedMedia.length)
+        }
+      } catch (error) {
+        this.debugLog(undefined, 'get_msg 失败: ' + describe(error))
+      }
+    }
     const blocks: ContentBlock[] = []
     const parts: Array<Record<string, unknown>> = []
     if (media.length === 0) return { notes: [], blocks, parts }
