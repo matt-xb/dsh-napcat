@@ -272,9 +272,24 @@ export function registerTools(
     return groupId
   }
 
-  const listGroupFiles = async (groupId: string): Promise<ObGroupFile[]> => {
-    const data = await conn.call<{ files?: ObGroupFile[] }>('get_group_file_list', { group_id: groupId })
-    return Array.isArray(data?.files) ? data.files : []
+  const listGroupFiles = async (groupId: string, folderId?: string): Promise<ObGroupFile[]> => {
+    // NapCat 新版移除了 get_group_file_list，改用 get_group_root_files / get_group_files_by_folder
+    const attempts: Array<{ action: string; params: Record<string, unknown> }> = [
+      folderId === undefined || folderId === ''
+        ? { action: 'get_group_root_files', params: { group_id: groupId } }
+        : { action: 'get_group_files_by_folder', params: { group_id: groupId, folder_id: folderId } },
+      { action: 'get_group_file_list', params: { group_id: groupId } },
+    ]
+    const errors: string[] = []
+    for (const attempt of attempts) {
+      try {
+        const data = await conn.call<{ files?: ObGroupFile[] }>(attempt.action, attempt.params)
+        if (Array.isArray(data?.files)) return data.files
+      } catch (error) {
+        errors.push(attempt.action + ': ' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    throw new Error('列群文件失败（该 NapCat 版本可能不支持群文件接口）：' + errors.join('；'))
   }
 
   const sizeText = (bytes: number | undefined): string => {
@@ -351,7 +366,7 @@ export function registerTools(
       const urlData = await conn.call<{ url?: string }>('get_group_file_url', {
         group_id: groupId,
         file_id: String(target.file_id ?? ''),
-        busid: target.busid ?? 0,
+        busid: target.busid ?? 102,
       })
       const url = urlData?.url
       if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
