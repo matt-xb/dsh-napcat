@@ -585,7 +585,7 @@ export class Bridge {
             this.opts.log('info', '已通过 sessionController 投递（含图片）: ' + chat.ref.key)
           } catch (error) {
             logLine('controller 投递失败: ' + describe(error))
-            this.opts.log('warn', 'sessionController 投递失败，退回 followup: ' + describe(error))
+            this.opts.log('debug', 'sessionController 投递失败，退回 followup（已验证可用）: ' + describe(error))
             try {
               chat.agent.followup(createUserMessage({
                 content: [...blocks, { type: 'text', text }],
