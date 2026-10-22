@@ -28,5 +28,5 @@ export declare function shortHash(text: string): string;
  * 支持 `#` 注释与空行。返回 key → 文本（key 形如 `group:123`）。
  */
 export declare function parsePersonaOverrides(raw: string): Map<string, string>;
-/** 会话标题：`MM-DD 内容摘要`（去掉换行/CQ 残留，最多取 18 字）。 */
+/** 会话标题：`MM-DD HH:mm`（本地时间；内容容易乱，所以只标时间）。 */
 export declare function titleFrom(text: string, now?: Date): string;

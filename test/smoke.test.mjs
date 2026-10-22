@@ -114,10 +114,8 @@ test('parsePersonaOverrides 空输入返回空表', () => {
   assert.equal(parsePersonaOverrides('').size, 0)
   assert.equal(parsePersonaOverrides('group:1=x\nprivate:2=y').size, 2)
 })
-test('titleFrom 生成 MM-DD + 内容摘要', () => {
-  const day = new Date(2026, 9, 22)
-  assert.equal(titleFrom('小灯讲个笑话', day), '10-22 小灯讲个笑话')
-  assert.equal(titleFrom('   ', day), '10-22')
-  const long = '一二三四五六七八九十一二三四五六七八九十一二三'
-  assert.equal(titleFrom(long, day), '10-22 ' + long.slice(0, 18) + '…')
+test('titleFrom 生成 MM-DD HH:mm', () => {
+  const at = new Date(2026, 9, 22, 9, 5)
+  assert.equal(titleFrom('小灯讲个笑话', at), '10-22 09:05')
+  assert.equal(titleFrom('', new Date(2026, 0, 3, 23, 59)), '01-03 23:59')
 })
