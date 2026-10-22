@@ -29,3 +29,5 @@ export declare function sourceToBase64Url(source: string, maxBytes: number): Pro
 export declare function base64UrlToBuffer(value: string): Buffer;
 /** 从「file:///path」「C:\\x\\y.png」「a.png」里取一个像样的文件名。 */
 export declare function nameFromRef(ref: string, fallback: string): string;
+/** 按魔数判断图片类型（附件服务会校验声明类型，必须准确）。 */
+export declare function imageMediaType(buffer: Buffer): 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' | undefined;

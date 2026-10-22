@@ -17,6 +17,7 @@ import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 /** 宿主 AgentRegistry.create 接受的模型选项（避免自己猜 ReasoningEffortId 的品牌类型）。 */
 type AgentOptions = NonNullable<NonNullable<Parameters<AgentRegistry['create']>[0]>['agentOptions']>
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId as makeSessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
@@ -24,8 +25,8 @@ import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, titleFrom, toText } from './text.js'
-import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, nameFromRef } from './media.js'
-import { writeFile } from 'node:fs/promises'
+import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
+import { readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
 /** 宿主注入的服务（inject 保证就绪）。 */
@@ -150,8 +151,8 @@ export class Bridge {
     }
 
     const chat = await this.ensureChat(ref)
-    const mediaNotes = await this.resolveInboundMedia(msg, chat)
-    const text = [rawText.trim(), ...mediaNotes].filter(part => part !== '').join('\n')
+    const media = await this.resolveInboundMedia(msg, chat)
+    const text = [rawText.trim(), ...media.notes].filter(part => part !== '').join('\n')
     if (text.trim() === '') {
       this.opts.log('debug', '空消息（无文本也没有可下载的媒体），跳过: ' + ref.key)
       return
@@ -169,9 +170,10 @@ export class Bridge {
     return this.bySession.get(sessionId)
   }
   /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
-  private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<string[]> {
+  private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[] }> {
     const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file')
-    if (media.length === 0) return []
+    const blocks: ContentBlock[] = []
+    if (media.length === 0) return { notes: [], blocks }
     let cwd = chat.cwd
     if (cwd === undefined) {
       cwd = await this.cwdFor(chat.ref)
@@ -189,7 +191,28 @@ export class Bridge {
           if (url === undefined || url === '') throw new Error('get_image 没有返回 url')
           const saved = await downloadToFile(url, inbox, nameFromRef(fileRef, 'image.png'), DEFAULT_MAX_IMAGE_BYTES)
           this.opts.log('info', '收到图片 → ' + saved.path + ' (' + Math.round(saved.bytes / 1024) + 'KB)')
-          notes.push('[图片: ' + saved.path + ']')
+          // 走 DSH 原生附件：图片作为 image block 进模型请求；纯文本模型由宿主降级为占位文本
+          const buffer = await readFile(saved.path)
+          const mediaType = imageMediaType(buffer)
+          const attachments = (this.opts.ctx as unknown as {
+            attachments?: { saveImages?(inputs: Array<{ data: Uint8Array; mediaType: string; name?: string }>): Promise<unknown[]> }
+          }).attachments
+          let attached = false
+          if (mediaType !== undefined && attachments?.saveImages !== undefined) {
+            try {
+              const refs = await attachments.saveImages([
+                { data: new Uint8Array(buffer), mediaType, name: nameFromRef(fileRef, 'image') },
+              ])
+              const ref = refs[0]
+              if (ref !== undefined) {
+                blocks.push({ type: 'image', attachment: ref } as ContentBlock)
+                attached = true
+              }
+            } catch (error) {
+              this.opts.log('warn', '图片登记为附件失败，退回路径注释: ' + describe(error))
+            }
+          }
+          if (!attached) notes.push('[图片: ' + saved.path + ']')
         } else {
           const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_file', { file: fileRef })
           let savedPath: string | undefined
@@ -212,7 +235,7 @@ export class Bridge {
         notes.push('[' + (seg.type === 'image' ? '图片' : '文件') + ': 下载失败（' + reason + '）]')
       }
     }
-    return notes
+    return { notes, blocks }
   }
   // ── 会话装配 ───────────────────────────────────────────────────────────────
 
@@ -463,7 +486,7 @@ export class Bridge {
     return dir
   }
 
-  private dispatch(chat: ChatState, text: string): void {
+  private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = []): void {
     chat.buffer = []
     chat.lastText = text
     // 每次投递前重新断言「免审批」：用户在 GUI 换过权限档位也能继续工作
@@ -490,7 +513,7 @@ export class Bridge {
     let pending: unknown
     try {
       pending = chat.agent.followup(createUserMessage({
-        content: [{ type: 'text', text }],
+        content: [{ type: 'text', text }, ...blocks],
         source: { kind: 'plugin:dsh-napcat' },
       }))
       this.opts.log('info', '已投递到模型: ' + chat.ref.key + ' (' + text.length + ' 字)')
