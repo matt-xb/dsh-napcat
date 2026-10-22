@@ -26,6 +26,7 @@ import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.j
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, titleFrom, toText } from './text.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
+import { randomUUID } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
 
@@ -171,10 +172,11 @@ export class Bridge {
     return this.bySession.get(sessionId)
   }
   /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
-  private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[] }> {
+  private async resolveInboundMedia(msg: ObMessageEvent, chat: ChatState): Promise<{ notes: string[]; blocks: ContentBlock[]; parts: Array<Record<string, unknown>> }> {
     const media = segmentsOf(msg.message).filter(seg => seg.type === 'image' || seg.type === 'file')
     const blocks: ContentBlock[] = []
-    if (media.length === 0) return { notes: [], blocks }
+    const parts: Array<Record<string, unknown>> = []
+    if (media.length === 0) return { notes: [], blocks, parts }
     let cwd = chat.cwd
     if (cwd === undefined) {
       cwd = await this.cwdFor(chat.ref)
@@ -210,6 +212,7 @@ export class Bridge {
                 if ((part as { type?: string }).type === 'image') blocks.push(part as ContentBlock)
               }
               attached = blocks.length > 0
+              if (attached) parts.push({ type: 'image', mediaType, data: buffer.toString('base64'), name: nameFromRef(fileRef, 'image') })
               this.opts.log('debug', '图片已走 admitPromptContent，产出 ' + parts.length + ' 段')
             } catch (error) {
               this.opts.log('warn', 'admitPromptContent 失败: ' + describe(error))
@@ -244,7 +247,7 @@ export class Bridge {
         notes.push('[' + (seg.type === 'image' ? '图片' : '文件') + ': 下载失败（' + reason + '）]')
       }
     }
-    return { notes, blocks }
+    return { notes, blocks, parts }
   }
   // ── 会话装配 ───────────────────────────────────────────────────────────────
 
@@ -495,7 +498,7 @@ export class Bridge {
     return dir
   }
 
-  private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = []): void {
+  private dispatch(chat: ChatState, text: string, blocks: ContentBlock[] = [], parts: Array<Record<string, unknown>> = []): void {
     chat.buffer = []
     chat.lastText = text
     // 每次投递前重新断言「免审批」：用户在 GUI 换过权限档位也能继续工作
@@ -518,6 +521,38 @@ export class Bridge {
       } catch (error) {
         this.opts.log('debug', '设置会话标题失败: ' + describe(error))
       }
+    }
+    // 有图片时优先走 session-controller 的 prompt（GUI 传图同款入口，唯一能把图带进会话的路径）
+    if (parts.length > 0) {
+      const holder = this.opts.ctx as unknown as { get?(name: string): unknown; sessionController?: unknown }
+      const svc = (holder.get?.('sessionController') ?? holder.sessionController) as {
+        prompt?(request: { requestId: string; sessionId: unknown; mode: 'queue'; content: unknown[] }): Promise<unknown>
+      } | undefined
+      if (svc?.prompt !== undefined) {
+        void (async () => {
+          try {
+            await svc.prompt!({
+              requestId: randomUUID(),
+              sessionId: chat.agent.session.id,
+              mode: 'queue',
+              content: [...parts, { type: 'text', text }],
+            })
+            this.opts.log('info', '已通过 sessionController 投递（含图片）: ' + chat.ref.key)
+          } catch (error) {
+            this.opts.log('warn', 'sessionController 投递失败，退回 followup: ' + describe(error))
+            try {
+              chat.agent.followup(createUserMessage({
+                content: [...blocks, { type: 'text', text }],
+                source: { kind: 'plugin:dsh-napcat' },
+              }))
+            } catch (fallbackError) {
+              this.opts.log('warn', '退回 followup 也失败: ' + describe(fallbackError))
+            }
+          }
+        })()
+        return
+      }
+      this.opts.log('warn', '拿不到 sessionController，图片只能走 followup（可能丢图）')
     }
     let pending: unknown
     try {
