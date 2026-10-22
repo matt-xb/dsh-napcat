@@ -227,3 +227,32 @@ dsh-napcat 不做"第二个 dsh-im"，也不做"第二个 dsh-onebot"。定位�
 ## 待实现（用户已确认排队）
 
 - [ ] **群/人性格（per-chat persona）**：设置页加多行配置（形如 `group:123456=你是群宠…` / `private:10001=私人助理…`）。实现照 **dsh-im** 的动态提示词上下文：`ctx.inject(['systemPrompt'], (promptCtx) => promptCtx.systemPrompt.context({ name: 'dsh-napcat:persona', order: 100, text: (assembly) => registry.get(assembly?.agent?.session?.id) ?? '' }))`，按 sessionId 查表（不用写 AGENTS.md）。用户 2026-10-21 明确：**先跑通基本功能，这个随后再加**。
+
+## 已排查：入站图片的 ImageBlock 会在 followup 路径丢失（2026-10-22，v0.3.3）
+
+**现象**：QQ 里收到图片后，模型侧只看到文本注释 `[图片: <路径>]`，没有图像本体；换成走
+`attachments.admitPromptContent` 后仍不变。
+
+**证据链（都已核过）**
+1. 解会话日志（zstd 多帧，需按帧拆开）：`user/message.content` **只有 text**，
+   从未出现 `"type":"image"` → 图在写会话之前就没了。
+2. `createUserMessage` → `createMessage` = `deepFreeze(structuredClone({...input}))`，
+   **不过滤 content** → 不是这里丢的。
+3. `source.kind` 在本版本合法值就是 `'plugin:dsh-napcat'`（`{kind:'plugin',plugin}` 是
+   另一 DSH 版本的写法，类型会报错）→ 不是 source 的问题。
+4. `attachments.admitPromptContent` 内部 = `admitEncodedImages → saveImages →
+   {type:'image',attachment}`，与直接 `saveImages` **等价** → 换入口没用。
+5. `dsh-agent-loop` 全文 0 处涉及 image/projectImagesForTextModel
+   → 循环不碰图像，`followup` 只把消息塞进 inbox。
+
+**结论**：丢失发生在 `agent.followup → inbox splice → 会话 append` 这一段
+（`createUserMessage` 之后、落盘之前）。
+
+**下一步（要动宿主或换注入方式）**
+- 读 `dsh-agent-loop` 的 inbox splice / `user/message` 落盘路径，确认是否只序列化 text
+- 或改走 GUI 同款入口：`session-controller` 的 prompt + attachments 准入（插件侧不一定可达）
+- 参考：`dsh-qqbot/src/media/vision-tool.ts` 用 `llm.stream` **直接调模型**（不经 inbox），
+  所以它能带图 —— 但那是"插件自带视觉调用"，用户明确不需要
+
+**当前替代方案（已上线）**：收图 → 存 `<会话cwd>/napcat-inbox/` → 文本注释
+`[图片: <绝对路径>]`，由 agent 用 modlens / read_image 读。v0.3.2 起路径注释始终保留。
