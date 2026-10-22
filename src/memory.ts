@@ -104,6 +104,8 @@ export class MemoryStore {
       name,
       arguments: args,
       agent,
+      // 宿主 prepareExecution 会读 exec.signal.aborted，不传就抛 TypeError
+      signal: new AbortController().signal,
     })
     return collectText(result)
   }
