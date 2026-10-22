@@ -435,7 +435,11 @@ export class Bridge {
   private onSessionEvent(session: Session, event: SessionEvent): void {
     if (this.stopped) return
     const key = this.bySession.get(String(session.id))
-    if (key === undefined) return
+    if (key === undefined) {
+      if (String(session.id).includes('napcat')) this.opts.log('warn', '事件找不到会话映射: ' + String(session.id) + ' type=' + String(event.type))
+      return
+    }
+    this.opts.log('info', '出站事件: ' + String(event.type) + ' ← ' + key)
     const chat = this.chats.get(key)
     if (chat === undefined) return
     // 任何事件都说明这一轮在跑（turn/start 未必总能收到）
@@ -447,6 +451,7 @@ export class Bridge {
     }
     if (event.type === 'assistant/message') {
       const text = messageText(event.data.message)
+      this.opts.log('info', '助手文本长度: ' + text.length)
       if (text.trim() !== '') chat.buffer.push(text.trim())
       return
     }
@@ -487,6 +492,7 @@ export class Bridge {
           ...(chat.ref.kind === 'group' ? { group_id: chat.ref.id } : { user_id: chat.ref.id }),
           message,
         })
+        this.opts.log('info', '已发送到 QQ: ' + chat.ref.key + ' (' + chunk.length + ' 字)')
       } catch (error) {
         this.opts.log('warn', '发送失败: ' + chat.ref.key + ' — ' + describe(error))
         return
