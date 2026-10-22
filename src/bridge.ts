@@ -152,7 +152,8 @@ export class Bridge {
 
     const chat = await this.ensureChat(ref)
     const media = await this.resolveInboundMedia(msg, chat)
-    const text = [rawText.trim(), ...media.notes].filter(part => part !== '').join('\n')
+    const textWithoutImageMarkers = rawText.replace(/\[图片\]/g, '').replace(/\n{2,}/g, '\n').trim()
+    const text = [textWithoutImageMarkers, ...media.notes].filter(part => part !== '').join('\n')
     if (text.trim() === '') {
       this.opts.log('debug', '空消息（无文本也没有可下载的媒体），跳过: ' + ref.key)
       return
@@ -212,7 +213,9 @@ export class Bridge {
               this.opts.log('warn', '图片登记为附件失败，退回路径注释: ' + describe(error))
             }
           }
-          if (!attached) notes.push('[图片: ' + saved.path + ']')
+          // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
+          // 视觉模型另外还能直接拿到 image block。
+          notes.push('[图片: ' + saved.path + ']' + (attached ? '' : '（未登记为附件，仅路径）'))
         } else {
           const info = await this.opts.conn.call<{ base64?: string; url?: string; file?: string }>('get_file', { file: fileRef })
           let savedPath: string | undefined
