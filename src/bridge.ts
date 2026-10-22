@@ -167,6 +167,16 @@ export class Bridge {
     this.dispatch(chat, text)
   }
 
+  /** 写一行诊断到 <会话cwd>/napcat-inbox/_image-debug.log（出问题时能自查，用户随时可删）。 */
+  private debugLog(cwd: string | undefined, note: string): void {
+    try {
+      const dir = cwd ?? process.cwd()
+      void appendFile(join(dir, 'napcat-inbox', '_image-debug.log'),
+        new Date().toISOString() + ' v0.3.6 ' + note + '\n').catch(() => undefined)
+    } catch {
+      // 诊断日志写不了就算了
+    }
+  }
   /** 宿主会话 id → QQ 会话 key（工具省略 chat_id 时用来定位当前会话）。 */
   keyForSession(sessionId: string): string | undefined {
     return this.bySession.get(sessionId)
@@ -183,6 +193,7 @@ export class Bridge {
       chat.cwd = cwd
     }
     const inbox = await ensureInbox(cwd)
+    this.debugLog(cwd, '收到媒体 segments=' + media.length)
     const notes: string[] = []
     for (const seg of media) {
       const data = (seg.data ?? {}) as { file?: unknown }
@@ -197,6 +208,7 @@ export class Bridge {
           // 走 DSH 原生附件：图片作为 image block 进模型请求；纯文本模型由宿主降级为占位文本
           const buffer = await readFile(saved.path)
           const mediaType = imageMediaType(buffer)
+          this.debugLog(cwd, '图片已下载 bytes=' + buffer.byteLength + ' type=' + String(mediaType))
           // 走宿主官方 prompt 附件准入（GUI 上传图片的同一入口）
           const ctxAny = this.opts.ctx as unknown as { get?(name: string): unknown; attachments?: unknown }
           const attachments = (ctxAny.get?.('attachments') ?? ctxAny.attachments) as {
@@ -212,14 +224,17 @@ export class Bridge {
                 if ((part as { type?: string }).type === 'image') blocks.push(part as ContentBlock)
               }
               attached = blocks.length > 0
+              this.debugLog(cwd, 'admit ok parts=' + parts.length + ' blocks=' + blocks.length)
               if (attached) parts.push({ type: 'image', mediaType, data: buffer.toString('base64'), name: nameFromRef(fileRef, 'image') })
               this.opts.log('debug', '图片已走 admitPromptContent，产出 ' + parts.length + ' 段')
             } catch (error) {
+              this.debugLog(cwd, 'admit 失败: ' + describe(error))
               this.opts.log('warn', 'admitPromptContent 失败: ' + describe(error))
             }
           } else if (mediaType === undefined) {
             this.opts.log('warn', '图片类型无法识别（不是 png/jpeg/gif/webp），只给路径')
           } else {
+            this.debugLog(cwd, '宿主没有 admitPromptContent')
             this.opts.log('warn', '宿主没有 attachments.admitPromptContent，只给路径')
           }
           // 路径注释永远保留：无视觉模型只会拿到宿主的占位文本，路径是它们唯一的抓手；
@@ -533,6 +548,7 @@ export class Bridge {
           // 诊断日志写不了就算了
         }
       }
+      this.debugLog(chat.cwd, 'dispatch parts=' + parts.length)
       logLine('进入图片分支')
       const holder = this.opts.ctx as unknown as { get?(name: string): unknown; sessionController?: unknown }
       const svc = (holder.get?.('sessionController') ?? holder.sessionController) as {
