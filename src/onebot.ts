@@ -15,6 +15,7 @@ import type { IncomingMessage } from 'node:http'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 
 import type { ObActionResponse, ObEvent } from './types.js'
+import { sanitizeOutgoingMessage } from './text.js'
 
 export type LogLevel = 'debug' | 'info' | 'warn'
 
@@ -105,6 +106,9 @@ export class OneBotConnection {
    * @throws 未连接 / 超时 / 对端返回 failed
    */
   async call<T = unknown>(action: string, params: Record<string, unknown> = {}, timeoutMs = CALL_TIMEOUT_MS): Promise<T> {
+    if (action === 'send_msg' || action === 'send_group_msg' || action === 'send_private_msg') {
+      params = { ...params, message: sanitizeOutgoingMessage(params.message) }
+    }
     const socket = this.socket
     if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
       throw new Error('NapCat 未连接（检查 mode/url/token 与 NapCat 的 ws 是否在监听）')

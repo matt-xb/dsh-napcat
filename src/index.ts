@@ -21,7 +21,7 @@ export { Config }
 
 export const name = 'dsh-napcat'
 /** tools = 注册工具；agents = 按 QQ 会话创建/恢复 agent；workspaceRegistry = 把会话挂进工作区。 */
-export const inject = ['tools', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt', 'agentDefaultModel', 'agentPresets', 'approval', 'sessionTitle', 'attachments']
+export const inject = ['tools', 'agents', 'workspaceRegistry', 'sessionPersistence', 'systemPrompt', 'agentDefaultModel', 'llm', 'subagents', 'agentPresets', 'approval', 'sessionTitle', 'attachments']
 
 const LEVEL_RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2 }
 
@@ -69,6 +69,16 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
 
   registerTools(ctx, conn, log, {
     keyForSession: sessionId => bridge.keyForSession(sessionId),
+    targetAllowed: (sessionId, chatKey) => bridge.taskTargetAllowed(sessionId, chatKey),
+    trackTextSend: (sessionId, chatKey) => bridge.trackTextSend(sessionId, chatKey),
+    get stickerRoot() { return config.stickerRoot },
+    recentImages: chatKey => config.memoryEnabled ? bridge.mem.readRecentImages(chatKey) : Promise.resolve([]),
+    recordImageSend: async (chatKey, source, name) => {
+      if (!config.memoryEnabled) return
+      // Remote URLs may contain credentials; never persist them.
+      const remote = /^https?:\/\//i.test(source)
+      await bridge.mem.appendRecent(chatKey, { nick: '助手', role: 'assistant', text: '[已发送图片：' + (remote ? '网络图片' : name) + ']', image: remote ? undefined : source })
+    },
     allowedGroups: () => config.groupAllowFrom,
     rememberSpace: (chatKey, spaceId) => bridge.saveMemorySpace(chatKey, spaceId),
   })

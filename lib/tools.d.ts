@@ -4,6 +4,11 @@ import type { LogLevel, OneBotConnection } from './onebot.js';
 export interface ToolDeps {
     /** 会话 id → 当前 QQ 会话（省略 chat_id 时用） */
     keyForSession?: (sessionId: string) => string | undefined;
+    targetAllowed?: (sessionId: string, chatKey: string) => boolean;
+    trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined;
+    recordImageSend?: (chatKey: string, source: string, name: string) => Promise<void>;
+    recentImages?: (chatKey: string) => Promise<string[]>;
+    stickerRoot?: string;
     maxImageBytes?: number;
     maxFileBytes?: number;
     /** 允许操作的群号（群文件工具用），省略=不限制 */

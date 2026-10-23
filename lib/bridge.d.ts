@@ -10,6 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from './config.js';
 import type { LogLevel, OneBotConnection } from './onebot.js';
+import { MemoryStore } from './memory.js';
 import type { ObEvent } from './types.js';
 export interface BridgeOptions {
     ctx: Context;
@@ -20,7 +21,8 @@ export interface BridgeOptions {
 export declare class Bridge {
     private readonly opts;
     /** 群/私聊记忆（一群一目录 + mnemon 长期记忆）。 */
-    private readonly mem;
+    readonly mem: MemoryStore;
+    private readonly tasks;
     /** 已尝试预热的聊天（每会话一次）。 */
     /** 上次预热尝试时间（避免频繁重试）。 */
     private readonly warmAttempts;
@@ -83,6 +85,9 @@ export declare class Bridge {
     private debugLog;
     /** 宿主会话 id → QQ 会话 key（工具省略 chat_id 时用来定位当前会话）。 */
     keyForSession(sessionId: string): string | undefined;
+    taskTargetAllowed(sessionId: string, chatKey: string): boolean;
+    trackTextSend(sessionId: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined;
+    private notifyTask;
     /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
     private resolveInboundMedia;
     /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */
@@ -105,6 +110,7 @@ export declare class Bridge {
             };
         };
     } | undefined): string;
+    private personaForChat;
     private attachToWorkspace;
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */
     private cwdFor;

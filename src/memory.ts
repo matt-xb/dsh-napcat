@@ -30,6 +30,21 @@ export interface ChatLike {
   agent?: unknown
 }
 
+interface RecentEntry {
+  nick: string
+  text: string
+  at?: number
+  role?: 'user' | 'assistant'
+  image?: string
+}
+interface RecentRow {
+  t: number
+  nick: string
+  text: string
+  role?: 'user' | 'assistant'
+  image?: string
+}
+
 const RECENT_FILE = 'recent.jsonl'
 const SPACE_FILE = 'space.json'
 const NOTES_FILE = 'notes.md'
@@ -110,10 +125,13 @@ export function parseSpaceMap(raw: string): Record<string, string> {
 }
 
 export class MemoryStore {
+  private readonly writes = new Map<string, Promise<number>>()
+
   constructor(private readonly opts: MemoryOptions) {}
 
   /** 每个聊天一个目录：memory/group-<号> / memory/private-<QQ> */
   private dirFor(chatKey: string): string {
+    if (!/^(group|private):[0-9]+$/.test(chatKey)) throw new Error('Invalid chat key')
     return join(this.opts.root, chatKey.replace(':', '-'))
   }
 
@@ -251,12 +269,14 @@ export class MemoryStore {
   }
 
   /** 追加一条最近消息（滚动保留；与已有同一条消息（5 秒内同内容）会合并而不是重复追加）。 */
-  async appendRecent(chatKey: string, entry: { nick: string; text: string; at?: number }): Promise<void> {
+  async appendRecent(chatKey: string, entry: RecentEntry): Promise<void> {
     try {
       await this.mergeInto(chatKey, [{
         t: entry.at ?? Date.now(),
         nick: entry.nick.slice(0, 24),
         text: entry.text.slice(0, 500),
+        role: entry.role ?? 'user',
+        image: entry.image,
       }])
     } catch (error) {
       this.opts.log('debug', '记录群消息失败: ' + (error instanceof Error ? error.message : String(error)))
@@ -268,11 +288,20 @@ export class MemoryStore {
    * 判重：同一「5 秒时间窗 + 归一化内容」视为同一条（历史接口秒级 / 实时毫秒级 / [图片] vs [图片:文件名]）。
    * 合并时保留更完整的那条（有昵称优先，其次文本更长）。
    */
-  private async mergeInto(chatKey: string, incoming: Array<{ t: number; nick: string; text: string }>): Promise<number> {
+  private mergeInto(chatKey: string, incoming: RecentRow[]): Promise<number> {
+    this.dirFor(chatKey)
+    const job = (this.writes.get(chatKey) ?? Promise.resolve(0)).catch(() => 0).then(() => this.writeRows(chatKey, incoming))
+    this.writes.set(chatKey, job)
+    void job.then(() => { if (this.writes.get(chatKey) === job) this.writes.delete(chatKey) }, () => { if (this.writes.get(chatKey) === job) this.writes.delete(chatKey) })
+    return job
+  }
+
+  private async writeRows(chatKey: string, incoming: RecentRow[]): Promise<number> {
     if (incoming.length === 0) return 0
     const dir = await this.ensureDir(chatKey)
     const path = join(dir, RECENT_FILE)
-    type Row = { t: number; nick: string; text: string }
+    type Row = RecentRow
+    const sameDelivery = (left: Row, right: Row): boolean => (left.role ?? 'user') === (right.role ?? 'user') && left.image === right.image
     const normText = (text: string): string => text.replace(/\[图片:[^\]]*\]/g, '[图片]').trim()
     /**
      * 合并同一条消息的两份记录：**逐字段取优**（不是整行二选一）。
@@ -283,6 +312,8 @@ export class MemoryStore {
     const better = (left: Row, right: Row): Row => {
       const rich = (nick: string): boolean => nick !== '' && nick !== '?'
       return {
+        role: left.role ?? right.role,
+        image: left.image ?? right.image,
         t: Math.min(left.t, right.t),
         nick: rich(left.nick) && !rich(right.nick) ? left.nick : rich(right.nick) && !rich(left.nick) ? right.nick : left.nick,
         text: right.text.length > left.text.length ? right.text : left.text,
@@ -306,7 +337,7 @@ export class MemoryStore {
     const before = rows.length
     for (const row of incoming) {
       // 同内容 + 5 秒内 → 合并
-      const index = rows.findIndex(existing => normText(existing.text) === normText(row.text) && Math.abs(existing.t - row.t) <= 5000)
+      const index = rows.findIndex(existing => sameDelivery(existing, row) && normText(existing.text) === normText(row.text) && Math.abs(existing.t - row.t) <= 5000)
       if (index >= 0) rows[index] = better(rows[index] as Row, row)
       else rows.push(row)
     }
@@ -315,7 +346,7 @@ export class MemoryStore {
     const compacted: Row[] = []
     for (const row of rows) {
       const last = compacted[compacted.length - 1]
-      if (last !== undefined && normText(last.text) === normText(row.text) && Math.abs(row.t - last.t) <= 5000) {
+      if (last !== undefined && sameDelivery(last, row) && normText(last.text) === normText(row.text) && Math.abs(row.t - last.t) <= 5000) {
         compacted[compacted.length - 1] = better(last, row)
       } else {
         compacted.push(row)
@@ -387,6 +418,27 @@ export class MemoryStore {
       return content.split('\n').filter(part => part.trim() !== '').length
     } catch {
       return 0
+    }
+  }
+
+  /** Only successful assistant image deliveries in this chat's last N records. */
+  async readRecentImages(chatKey: string, limit = 20): Promise<string[]> {
+    const directory = this.dirFor(chatKey)
+    await this.writes.get(chatKey)
+    if (limit <= 0) return []
+    try {
+      const content = await readFile(join(directory, RECENT_FILE), 'utf8')
+      const images: string[] = []
+      for (const line of content.split('\n').filter(Boolean).slice(-limit)) {
+        try {
+          const record = JSON.parse(line) as Partial<RecentRow>
+          if (record.role === 'assistant' && typeof record.image === 'string' && record.image) images.push(record.image)
+        } catch { /* Legacy or malformed records are not image deliveries. */ }
+      }
+      return images
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.reportFailure('读取本聊天发图记录失败', error)
+      return []
     }
   }
 

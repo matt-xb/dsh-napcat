@@ -1,7 +1,7 @@
 # dsh-napcat
 
-> 仓库：<https://github.com/wzwei1990/dsh-napcat>
-> [![ci](https://github.com/wzwei1990/dsh-napcat/actions/workflows/ci.yml/badge.svg)](https://github.com/wzwei1990/dsh-napcat/actions/workflows/ci.yml)
+> 仓库：<https://github.com/matt-xb/dsh-napcat>
+> [![ci](https://github.com/matt-xb/dsh-napcat/actions/workflows/ci.yml/badge.svg)](https://github.com/matt-xb/dsh-napcat/actions/workflows/ci.yml)
 
 给 [DeepSeek Harness](https://github.com/runzhliu/deepseek-harness) 加一个 **QQ 通道**：通过 [NapCat](https://github.com/NapNeko/NapCatQQ)（OneBot 11 协议）把群聊/私聊消息送进 dsh 的 agent，再把回复发回 QQ。
 
@@ -13,7 +13,24 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 自己维护的一份实现：功能按需长，结构保持薄（连接层 / 会话桥 / 工具 / 配置四块，互不缠绕）。
 
-**当前版本 v0.3.20**（形态参考 `dsh-onebot` / `dsh-im` / `dsh-qqbot`）。
+**当前分支版本 v0.3.23-xb.1（预发布，实机验收待完成）**。
+
+本分支从 [wzwei1990/dsh-napcat](https://github.com/wzwei1990/dsh-napcat) 演进，保留原项目 MIT 许可与归属。以自己的聊天体验和设计为主线，不自动追随上游；仅在审查兼容性和安全性后选择性引入上游功能，发生冲突优先保留本分支设计。下面未特别注明的基础连接功能沿用原实现。
+
+### 本分支新增
+
+- **后台任务与聊天分流**：`napcat_task_start` 把生图、修图、文件制作等工作交给宿主独立 `spawn` 子会话；拿到接受回执就返回，前台可继续聊天。`napcat_task_status` 只显示本聊天实际任务阶段和最近事件时间，不猜百分比、不展示推理或工具参数。必须启用宿主 `subagents` 服务及 `spawn` 提供者；启动接受不是任务完成或 QQ 送达。
+- **任务回到原聊天**：子任务的 QQ 发送仅限绑定的原聊天；子孙任务不继承发送权限。最终文本由桥回传；生成图片和文件要求子任务调用 QQ 图片/文件发送工具，不能用本地路径或 GUI 文件卡片代替。工具已经成功发完文字后不再重复自动最终文本。只有收到成功回执才登记送达，失败保留为未回传。
+- **当前输入快照**：按真实入站消息 ID 保存本次已准入的图片和附件注释，排队的新消息不抹掉运行中输出、不替换当前任务附件。子会话不继承完整聊天历史，任务说明需交代完整；进程内记账，不承诺重启续跑。
+- **单一文字出口与隐私过滤**：保留已成功文字工具发送接管最终回复的修复，过滤内部上下文、宿主通知、过期/中断输出，保持后续新轮可正常回复。群引用媒体必须属于当前群；按发送者、@和引用区分对话对象。
+- **表情优先，不设比例**：有合适的已审核图时优先图，表达不了才文字；`napcat_find_sticker` 仅搜索配置的本地图库，成功发送才写本聊天图片历史。相近语义候选轻度降重、最近使用较早者优先，不能为了轮换发错情绪。图库内容需自行审核；本仓库不附带私人表情、聊天记录或第三方图片。
+- **人设与模型兼容**：支持 `private:*` / `group:*` 通配，精确聊天覆盖通配；只按目标模型声明的能力选择推理档，不复制其他模型的档位。
+
+#### 本地已审核图库
+
+设置 `stickerRoot` 为本地图库目录，默认空值禁用检索。目录根 `catalog.json` 放公共图；可选 `from-private-<QQ>` / `from-group-<群号>` 子目录只供当前聊天。每条至少包含 `id`、绝对 `path`、文件 `sha256`、`title`/`tags`；建议附 `useWhen`、`avoid`。专属条目还必须 `status: active` 和准确 `allowedChat`。只读直接子文件，拒绝重定向目录、符号链接及校验不符文件。目录和通用文件工具权限不是完整操作系统沙箱。
+
+部署前备份原插件和配置；运行 `npm ci --ignore-scripts && npm run build && npm test`。升级模块需要宿主重新加载，浏览器刷新不能代替；请在合适时间重载后实际验收“长任务期间继续聊天、修图不串附件、结果只回原聊天、文字只发一次”。离线测试不代表真实模型、QQ、图片质量已通过。主动闲聊的本地 idle 插件是独立部署，本分支不会重复安装或宣称已迁入它。
 
 ## 功能
 
@@ -241,7 +258,7 @@ private:<QQ>=<人设>
 
 ``bash
 # 从 GitHub
-dsh plugin --profile web add github:wzwei1990/dsh-napcat
+dsh plugin --profile web add github:matt-xb/dsh-napcat
 
 # 或本地目录
 dsh plugin --profile web add /path/to/dsh-napcat

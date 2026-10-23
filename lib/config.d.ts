@@ -50,6 +50,8 @@ export interface Config {
     model: string;
     /** 日志级别。 */
     logLevel: 'debug' | 'info' | 'warn';
+    /** 已审核表情包目录；空则禁用检索。 */
+    stickerRoot: string;
     memoryEnabled: boolean;
     memoryBackend: 'mnemon' | 'file';
     memoryAutoCapture: boolean;

@@ -28,6 +28,12 @@ export declare function shortHash(text: string): string;
  * 支持 `#` 注释与空行。返回 key → 文本（key 形如 `group:123`）。
  */
 export declare function parsePersonaOverrides(raw: string): Map<string, string>;
+/** Internal context must never be forwarded to QQ. */
+export declare function sanitizeReply(text: string): string | null;
+/** Same-turn comparison only; preserve numbers, code and emotional punctuation. */
+export declare function replyDedupKey(text: string): string;
+/** Tool and automatic sends share this wire boundary. */
+export declare function sanitizeOutgoingMessage(message: unknown): ObMessage;
 /** 会话标题：`MM-DD HH:mm`（本地时间；内容容易乱，所以只标时间）。 */
 export declare function titleFrom(text: string, now?: Date): string;
 /** 文件名模糊匹配打分（0 = 不匹配）。用户常只记得一部分名字。 */

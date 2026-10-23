@@ -1,0 +1,36 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { MemoryStore } from '../lib/memory.js'
+import { replyDedupKey, sanitizeOutgoingMessage, sanitizeReply } from '../lib/text.js'
+
+test('short Chinese punctuation dedup preserves questions, numbers and code', () => {
+  assert.equal(replyDedupKey('你好，世界。'), replyDedupKey('你好世界'))
+  for (const text of ['?', '？', '你好？', '你好！', '1.2', 'foo.bar', '中文'.repeat(80)]) assert.equal(replyDedupKey(text), text)
+  assert.equal(sanitizeReply('[[NAPCAT_SILENT]]'), '')
+  assert.equal(sanitizeReply('？'), '？')
+  assert.equal(sanitizeReply('<system-reminder>secret'), null)
+  assert.throws(() => sanitizeOutgoingMessage('[[NAPCAT_SILENT]]'), /空消息/)
+  assert.throws(() => sanitizeOutgoingMessage([{ type: 'text', data: { text: '<system-' } }, { type: 'text', data: { text: 'reminder>secret' } }]), /内部上下文/)
+  assert.deepEqual(sanitizeOutgoingMessage([{ type: 'text', data: { text: '？' } }]), [{ type: 'text', data: { text: '？' } }])
+})
+
+test('recent image memory preserves concurrent deliveries and isolates chat/role', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'napcat-memory-'))
+  try {
+    const mem = new MemoryStore({ ctx: {}, root, backend: 'file', spacePrefix: 'test-', recentLimit: 50, injectRecent: 10, injectMaxChars: 1000, log() {} })
+    await Promise.all([
+      mem.appendRecent('group:42', { nick: '助手', role: 'assistant', text: '[图片]', image: 'one.png' }),
+      mem.appendRecent('group:42', { nick: '助手', role: 'assistant', text: '[图片]', image: 'two.png' }),
+      mem.appendRecent('group:42', { nick: 'user', text: '[图片]', image: 'user.png' }),
+      mem.appendRecent('private:43', { nick: '助手', role: 'assistant', text: '[图片]', image: 'other.png' }),
+    ])
+    assert.deepEqual(await mem.readRecentImages('group:42'), ['one.png', 'two.png'])
+    assert.deepEqual(await mem.readRecentImages('private:43'), ['other.png'])
+    assert.deepEqual(await mem.readRecentImages('group:42', 0), [])
+    assert.deepEqual(await mem.readRecentImages('group:44'), [])
+    await assert.rejects(mem.readRecentImages('group:../escape'), /Invalid chat key/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

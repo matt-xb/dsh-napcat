@@ -23,10 +23,18 @@ export interface MemoryOptions {
 export interface ChatLike {
     agent?: unknown;
 }
+interface RecentEntry {
+    nick: string;
+    text: string;
+    at?: number;
+    role?: 'user' | 'assistant';
+    image?: string;
+}
 /** 解析 group:<群号>=<id> 多行配置。 */
 export declare function parseSpaceMap(raw: string): Record<string, string>;
 export declare class MemoryStore {
     private readonly opts;
+    private readonly writes;
     constructor(opts: MemoryOptions);
     /** 每个聊天一个目录：memory/group-<号> / memory/private-<QQ> */
     private dirFor;
@@ -48,17 +56,14 @@ export declare class MemoryStore {
     /** 召回与本群相关的内容（query 用最近对话摘要）。 */
     recall(chatKey: string, query: string, agent: unknown): Promise<string>;
     /** 追加一条最近消息（滚动保留；与已有同一条消息（5 秒内同内容）会合并而不是重复追加）。 */
-    appendRecent(chatKey: string, entry: {
-        nick: string;
-        text: string;
-        at?: number;
-    }): Promise<void>;
+    appendRecent(chatKey: string, entry: RecentEntry): Promise<void>;
     /**
      * 把若干行合并进 recent.jsonl（append 与预热共用）。
      * 判重：同一「5 秒时间窗 + 归一化内容」视为同一条（历史接口秒级 / 实时毫秒级 / [图片] vs [图片:文件名]）。
      * 合并时保留更完整的那条（有昵称优先，其次文本更长）。
      */
     private mergeInto;
+    private writeRows;
     /**
      * 预热：把历史消息**合并**进 recent（按 时间+内容 去重；旧记录里昵称为空而新数据有昵称时自动补全）。
      * 注意：绝不能覆盖——否则每次"缓冲过期"都会把之前攒的几十上百条历史顶掉。
@@ -74,6 +79,8 @@ export declare class MemoryStore {
     recentNewestAt(chatKey: string): Promise<number>;
     /** 当前缓冲条数（用于判断是否需要预热）。 */
     recentCount(chatKey: string): Promise<number>;
+    /** Only successful assistant image deliveries in this chat's last N records. */
+    readRecentImages(chatKey: string, limit?: number): Promise<string[]>;
     /** 读最近 N 条，返回「昵称: 内容」行。 */
     readRecent(chatKey: string, limit?: number): Promise<string[]>;
     /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
@@ -85,3 +92,4 @@ export declare class MemoryStore {
         spaceId?: string;
     }): string;
 }
+export {};

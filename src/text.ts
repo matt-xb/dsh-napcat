@@ -169,6 +169,40 @@ export function parsePersonaOverrides(raw: string): Map<string, string> {
   }
   return map
 }
+/** Internal context must never be forwarded to QQ. */
+export function sanitizeReply(text: string): string | null {
+  const clean = text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, '')
+  if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(clean.replace(/\s+/g, ''))) return null
+  return clean
+}
+
+/** Same-turn comparison only; preserve numbers, code and emotional punctuation. */
+export function replyDedupKey(text: string): string {
+  return text.length <= 120 && /^[\p{Script=Han}\s，。,．.]+$/u.test(text) && /\p{Script=Han}/u.test(text)
+    ? text.replace(/[\s，。,．.]/g, '') : text
+}
+
+/** Tool and automatic sends share this wire boundary. */
+export function sanitizeOutgoingMessage(message: unknown): ObMessage {
+  const clean = (text: string): string => {
+    const result = sanitizeReply(text)
+    if (result === null) throw new Error('拒绝外发内部上下文或模型通知')
+    return result
+  }
+  if (typeof message === 'string') {
+    const result = clean(message)
+    if (!result.trim()) throw new Error('空消息不外发')
+    return result
+  }
+  if (!Array.isArray(message) || !message.every((seg: unknown) => seg !== null && typeof seg === 'object' && typeof (seg as ObSegment).type === 'string')) throw new Error('发送消息必须是字符串或消息段数组')
+  const segments = message as ObSegment[]
+  clean(segments.filter(seg => seg.type === 'text').map(seg => String(seg.data?.text ?? '')).join(''))
+  const result = segments.map(seg => seg.type === 'text'
+    ? { ...seg, data: { ...seg.data, text: clean(String(seg.data?.text ?? '')) } } : seg)
+  if (!result.some(seg => seg.type !== 'reply' && (seg.type !== 'text' || String(seg.data?.text ?? '').trim()))) throw new Error('空消息不外发')
+  return result.filter(seg => seg.type !== 'text' || seg.data?.text !== '')
+}
+
 /** 会话标题：`MM-DD HH:mm`（本地时间；内容容易乱，所以只标时间）。 */
 export function titleFrom(text: string, now: Date = new Date()): string {
   void text
