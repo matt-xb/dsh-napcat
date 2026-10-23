@@ -344,7 +344,13 @@ export class MemoryStore {
         blocks.push('【本群长期记忆（mnemon）】空间 id = ' + parts.spaceId + '\n' +
           '写入：mnemon_remember({ memoryBodyId: "' + parts.spaceId + '", content: "…", tags: ["napcat","' + parts.chatKey + '"] })\n' +
           '回忆：必须显式调用 mnemon_recall({ memoryBodyIds: ["' + parts.spaceId + '"], query: "…" }) —— 不要依赖 mnemon 的自动回忆。\n' +
-          '（若日志里出现 "Recall requires the View pinned to the current turn"：这是插件驱动会话下的已知噪音，可忽略，显式回忆不受影响。）')
+          '分层约定（写入时 content 加前缀 + tags 区分）：\n' +
+          '  【设定】群规矩 / 称呼 / 习惯 → tags 加 "setting"\n' +
+          '  【黑话】群内术语 / 缩写 → tags 加 "glossary"\n' +
+          '  【人物】成员关系 / 身份 / 别名 → tags 加 "person"\n' +
+          '  【事实】其他结论 / 约定 → 不加额外标签\n' +
+          '回答本群问题前先做固定层召回：mnemon_recall({ memoryBodyIds: ["' + parts.spaceId + '"], query: "设定 称呼 黑话 人物" })，' +
+          '再按当前话题做一次按需召回。')
       } else {
         blocks.push('【本群长期记忆（mnemon）尚未配置空间 id】\n' +
           '本群还没有记忆空间。需要长期记住信息前：先 mnemon_memory_body_create({ name: "' + this.opts.spacePrefix + parts.chatKey + '", description: "QQ ' + parts.chatKey + ' 的长期记忆" })，' +

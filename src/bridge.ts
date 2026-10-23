@@ -252,22 +252,26 @@ export class Bridge {
         if (word !== '') commandText = stripKeyword(commandText, word)
       }
       commandText = commandText.trim()
-      const rememberMatch = /^记住[:：]?\s*([\s\S]+)$/.exec(commandText)
-      if (rememberMatch !== null && rememberMatch[1] !== undefined && rememberMatch[1].trim() !== '') {
-        const content = rememberMatch[1].trim()
+      const rememberMatch = /^记住(设定|黑话|人物|事实)?[:：]?\s*([\s\S]+)$/.exec(commandText)
+      if (rememberMatch !== null && rememberMatch[2] !== undefined && rememberMatch[2].trim() !== '') {
+        const kind = rememberMatch[1] ?? '事实'
+        const extraTag = kind === '设定' ? 'setting' : kind === '黑话' ? 'glossary' : kind === '人物' ? 'person' : ''
+        const rawContent = rememberMatch[2].trim()
+        const content = '【' + kind + '】' + rawContent
         if (this.opts.config.memoryBackend === 'mnemon') {
           // mnemon 的记忆操作要求"本轮 turn 的 View"：插件在轮次外调会被拒，
           // 所以把请求投给模型，让它在**本轮内**创建空间/写入（注入块里也给了规范）。
           const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
           const spaceName = this.opts.config.memorySpacePrefix + ref.key
+          const tags = '["napcat","' + ref.key + '"' + (extraTag === '' ? '' : ',"' + extraTag + '"') + ']'
           const steps = spaceId !== undefined
-            ? '直接调用 mnemon_remember({ memoryBodyId: "' + spaceId + '", content: <下面内容>, tags: ["napcat","' + ref.key + '"] })'
+            ? '直接调用 mnemon_remember({ memoryBodyId: "' + spaceId + '", content: <下面内容>, tags: ' + tags + ' })'
             : '本群还没有记忆空间，按顺序执行：\n'
               + '1) mnemon_memory_body_create({ name: "' + spaceName + '", description: "QQ ' + ref.key + ' 的长期记忆" })\n'
               + '2) mnemon_memory_body_update({ memoryBodyId: <上一步的 id>, active: true })\n'
               + '3) napcat_memory_space({ group_id: "' + ref.id + '", space_id: <同一个 id> })   ← 让插件记住这个 id\n'
-              + '4) mnemon_remember({ memoryBodyId: <同一个 id>, content: <下面内容>, tags: ["napcat","' + ref.key + '"] })'
-          await this.dispatch(chat, '[记忆请求] 把下面这条信息写入本群长期记忆。\n' + steps + '\n\n内容：' + content + '\n\n完成后只回一句「已记住」即可。', [], [])
+              + '4) mnemon_remember({ memoryBodyId: <同一个 id>, content: <下面内容>, tags: ' + tags + ' })'
+          await this.dispatch(chat, '[记忆请求]（类别：' + kind + '）把下面这条信息写入本群长期记忆。\n' + steps + '\n\n内容（含【' + kind + '】前缀，请原样写入）：' + content + '\n\n完成后只回一句「已记住」即可。', [], [])
           return
         }
         const ok = await this.mem.remember(ref.key, content, chat.agent, ['group:' + ref.id])
