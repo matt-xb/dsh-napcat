@@ -51,6 +51,7 @@ export interface Config {
     logLevel: 'debug' | 'info' | 'warn';
     memoryEnabled: boolean;
     memoryBackend: 'mnemon' | 'file';
+    memoryAutoCapture: boolean;
     memorySpacePrefix: string;
     memorySpaces: string;
     recentLimit: number;

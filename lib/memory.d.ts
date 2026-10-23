@@ -8,6 +8,8 @@ export interface MemoryOptions {
     spacePrefix: string;
     /** 长期记忆后端：mnemon（交给模型写）或 file（纯本地） */
     backend: 'mnemon' | 'file';
+    /** 自动记忆：模型自己判断写入（关闭则只响应显式「记住」） */
+    autoCapture?: boolean;
     /** 配置里手填的空间 id（group:<号>=<id> 多行） */
     spaces?: string;
     /** recent.jsonl 保留条数 */

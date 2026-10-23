@@ -54,6 +54,7 @@ export interface Config {
   logLevel: 'debug' | 'info' | 'warn'
   memoryEnabled: boolean
   memoryBackend: 'mnemon' | 'file'
+  memoryAutoCapture: boolean
   memorySpacePrefix: string
   memorySpaces: string
   recentLimit: number
@@ -113,6 +114,7 @@ export const Config: Z<Config> = z.object({
   logLevel: z.union([z.const('debug'), z.const('info'), z.const('warn')]).default('info')
     .description('日志级别').volatile(),
   memoryEnabled: z.boolean().default(true).description('开启群记忆（最近对话缓冲 + 长期记忆）').volatile(),
+  memoryAutoCapture: z.boolean().default(true).description('自动记忆：模型自己判断并写入群设定/黑话/人物关系，无需用户说「记住」').volatile(),
   memoryBackend: z.union([z.const('mnemon'), z.const('file')]).default('mnemon').description('长期记忆后端：file=本地文件（推荐，插件自管）；mnemon=交给模型用 mnemon 工具写（需在本群配置 memorySpaces）').volatile(),
   memorySpaces: z.string().default('').description('mnemon 后端用：每行 group:<群号>=<记忆空间id>（在 mnemon 面板建好空间后填 id）').volatile(),
   memorySpacePrefix: z.string().default('napcat-').description('每群一个 mnemon 记忆空间，空间名前缀').volatile(),
@@ -150,6 +152,7 @@ export const DEFAULTS: Config = {
   model: '',
   logLevel: 'info',
   memoryEnabled: true,
+  memoryAutoCapture: true,
   memoryBackend: 'mnemon',
   memorySpaces: '',
   memorySpacePrefix: 'napcat-',
