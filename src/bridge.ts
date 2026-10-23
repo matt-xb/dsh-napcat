@@ -58,9 +58,10 @@ interface ChatState {
   ref: ChatRef
   agent: Agent
   dispose: () => Promise<void>
-  /** 本轮已产生的助手文本（turn/end 时一次性发出）。 */
+  /** 当前最终候选；新一步会使前一步失效，turn/end 只发送最后正式答复。 */
   buffer: string[]
   outputTurn?: number
+  outputStep?: number
   outputActive?: boolean
   outputBlocked?: boolean
   toolTexts?: Set<string>
@@ -1289,6 +1290,7 @@ export class Bridge {
     if (event.type === 'turn/start') {
       if (chat.outputTurn !== undefined && event.data.turn <= chat.outputTurn) return
       chat.outputTurn = event.data.turn
+      chat.outputStep = undefined
       chat.outputActive = true
       chat.outputBlocked = false
       chat.toolTexts = new Set()
@@ -1296,16 +1298,28 @@ export class Bridge {
       chat.buffer = []
       return
     }
+    if (event.type === 'step/start') {
+      if (!chat.outputActive || event.data.turn !== chat.outputTurn
+        || (chat.outputStep !== undefined && event.data.step <= chat.outputStep)) return
+      chat.outputStep = event.data.step
+      chat.buffer = []
+      return
+    }
     if (event.type === 'assistant/message') {
       const message = event.data.message
-      if (!chat.outputActive || event.data.turn !== chat.outputTurn || event.data.interrupted === true
-        || message.role !== 'assistant' || message.source?.kind !== 'model') return
+      if (!chat.outputActive || event.data.turn !== chat.outputTurn
+        || message.role !== 'assistant' || message.source?.kind !== 'model'
+        || (chat.outputStep !== undefined && event.data.step < chat.outputStep)) return
+      chat.outputStep = event.data.step
+      chat.buffer = []
+      if (event.data.interrupted === true) return
       const text = sanitizeReply(messageText(message))
       if (text === null) {
         chat.outputBlocked = true
         this.opts.log('warn', '已拦截包含内部上下文或模型通知的回复: ' + key)
-      } else if (text.trim() !== '' && !chat.buffer.some(part => replyDedupKey(part) === replyDedupKey(text.trim()))) {
-        chat.buffer.push(text.trim())
+      } else if (!message.content.some(part => part.type === 'tool-call') && text.trim() !== '') {
+        // Tool-step text is narration, not another final answer (e.g. before history compression).
+        chat.buffer = [text.trim()]
       }
       return
     }

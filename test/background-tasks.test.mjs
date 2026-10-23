@@ -54,6 +54,14 @@ test('activation returns before result; ownership exists before provider starts;
   assert.match(tasks.status('private:1'), /已回传/)
 })
 
+test('a task final result retains all legitimate text blocks from the host receipt', async () => {
+  const { tasks, runs, sent } = fixture()
+  await tasks.start({ parent, chatKey: 'private:1', prompt })
+  runs[0].result.resolve({ output: [{ type: 'text', text: 'first final section' }, { type: 'text', text: 'second final section' }], stopReason: 'completed' })
+  await tick()
+  assert.equal(sent.length, 1); assert.match(sent[0].text, /first final section[\s\S]*second final section/)
+})
+
 test('progress uses event names only, not thought, arguments or result body', async () => {
   const { tasks } = fixture()
   const { childId } = await tasks.start({ parent, chatKey: 'group:2', prompt })

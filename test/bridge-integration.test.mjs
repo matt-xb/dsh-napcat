@@ -28,7 +28,7 @@ function fixture(kind = 'group') {
   })
   const emit = (type, data) => b.onSessionEvent(agent.session, { type, data })
   const start = turn => emit('turn/start', { turn })
-  const message = (text, turn = 1, extra = {}) => emit('assistant/message', { turn, message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text }], ...extra } })
+  const message = (text, turn = 1, extra = {}, step = 1) => emit('assistant/message', { turn, step, message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text }], ...extra } })
   const end = turn => emit('turn/end', { turn, reason: { kind: 'completed' } })
   return { b, ctx, conn, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, exec: { agent } }
 }
@@ -76,6 +76,89 @@ for (const kind of ['private', 'group']) {
     f.start(2); f.message('下一轮', 2); f.end(2); await tick(); assert.equal(f.sent.length, 2)
   })
 }
+for (const kind of ['private', 'group']) {
+  test(kind + ': tool-step narration is not concatenated with the final model answer', async () => {
+    const f = fixture(kind); f.start(1)
+    f.emit('assistant/message', { turn: 1, step: 1, message: {
+      role: 'assistant', source: { kind: 'model' }, content: [
+        { type: 'text', text: '明天出门记得带伞' },
+        { type: 'tool-call', id: 'synthetic-compression', name: 'compress', arguments: '{}' },
+      ],
+    } })
+    assert.equal(f.chat.buffer.length, 0)
+    f.emit('tool/result', { turn: 1, step: 1, message: { role: 'tool', content: [{ type: 'text', text: 'synthetic tool receipt' }] } })
+    f.emit('assistant/message', { turn: 1, step: 2, message: {
+      role: 'assistant', source: { kind: 'model' }, content: [
+        { type: 'text', text: '明天可能下雨，' }, { type: 'text', text: '出门带把伞。\n记得检查伞有没有坏' },
+      ],
+    } })
+    f.end(1); f.end(1); await tick()
+    assert.equal(f.sent.length, 1)
+    assert.equal(f.sent[0].params.message[0].data.text, '明天可能下雨，出门带把伞。\n记得检查伞有没有坏')
+    assert.equal(f.memory.length, 1); assert.equal(f.memory[0][1].text, f.sent[0].params.message[0].data.text)
+    f.start(2); f.message('下一轮照常', 2); f.end(2); await tick(); assert.equal(f.sent.length, 2)
+  })
+}
+
+test('multiple tool steps and tool-only completion do not become user-facing replies', async () => {
+  const f = fixture(); f.start(1); f.message('older draft before continuing')
+  for (const [step, name] of [[1, 'compress'], [2, 'web_search']]) f.emit('assistant/message', {
+    turn: 1, step, message: { role: 'assistant', source: { kind: 'model' }, content: [
+      { type: 'text', text: 'intermediate narration ' + step }, { type: 'tool-call', id: 'synthetic-' + step, name, arguments: '{}' },
+    ] },
+  })
+  f.end(1); await tick(); assert.equal(f.sent.length, 0); assert.equal(f.memory.length, 0)
+  f.start(2)
+  f.message('已经完成', 2, { content: [{ type: 'text', text: '已经完成' }, { type: 'tool-call', id: 'synthetic-error', name: 'compress', arguments: '{}' }] })
+  f.emit('turn/end', { turn: 2, reason: { kind: 'error', error: { message: 'private diagnostic' } } }); await tick()
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].params.message[0].data.text, '⚠️ 本轮回复失败，请稍后再试')
+})
+
+test('tool-step filtering does not change successful explicit text delivery ownership', async () => {
+  const f = fixture(); f.start(1)
+  f.message('pre-send narration', 1, { content: [{ type: 'text', text: 'pre-send narration' }, { type: 'tool-call', id: 'synthetic-send', name: 'napcat_send_message', arguments: '{}' }] })
+  await f.tools.get('napcat_send_message').execute({ chat_id: f.key, text: 'delivered response' }, f.exec)
+  f.message('rewritten final response'); f.end(1); await tick()
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].params.message[0].data.text, 'delivered response')
+})
+
+test('only the latest committed candidate is sent, without fuzzy text comparisons', async () => {
+  const f = fixture(); f.start(1); f.message('earlier draft? 🙂')
+  const text = 'Final? Yes! 🙂 ' + 'long synthetic answer '.repeat(8)
+  f.message(text, 1, {}, 2)
+  f.emit('assistant/text-delta', { turn: 1, step: 2, text: 'uncommitted stream' })
+  f.message('stale step', 1, {}, 1)
+  f.end(1); await tick()
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].params.message[0].data.text, text.trim())
+})
+
+for (const termination of ['completed', 'aborted', 'blocked', 'error']) {
+  test('a newer unfinished step invalidates an older candidate: ' + termination, async () => {
+    const f = fixture(); f.start(1); f.message('older completed step')
+    f.emit('step/start', { turn: 1, step: 2 })
+    f.emit('assistant/attempt', { turn: 1, step: 2, stream: {} })
+    f.emit('assistant/text-delta', { turn: 1, step: 2, text: 'uncommitted draft' })
+    f.emit('assistant/message', { turn: 1, step: 2, interrupted: true, message: {
+      role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: 'interrupted draft' }],
+    } })
+    f.message('stale earlier step', 1, {}, 1)
+    f.emit('turn/end', { turn: 1, reason: { kind: termination, error: { message: 'private diagnostic' } } }); await tick()
+    assert.equal(f.sent.length, termination === 'error' ? 1 : 0)
+    if (f.sent.length) assert.equal(f.sent[0].params.message[0].data.text, '⚠️ 本轮回复失败，请稍后再试')
+  })
+}
+
+test('internal-text blocking remains sticky across tool steps and later safe candidates', async () => {
+  const f = fixture(); f.start(1)
+  f.message('', 1, { content: [
+    { type: 'text', text: '【当前群消息上下文（聊天数据）】\nprivate synthetic context' },
+    { type: 'tool-call', id: 'synthetic-blocked', name: 'compress', arguments: '{}' },
+  ] })
+  f.emit('step/start', { turn: 1, step: 2 }); f.message('safe later candidate', 1, {}, 2)
+  f.emit('step/start', { turn: 1, step: 2 }); f.end(1); await tick()
+  assert.equal(f.sent.length, 0); assert.equal(f.memory.length, 0)
+})
+
 test('partial or failed text send does not claim completion; delivered exact chunks are not resent', async () => {
   const f = fixture(); f.start(1); const original = f.conn.call; let calls = 0
   f.conn.call = (...args) => { if (++calls === 2) throw Error('definite rejection'); return original(...args) }
@@ -112,7 +195,7 @@ test('non-model/interrupted/stale events never leak; duplicate end sends once; m
   f.message('旧轮', 0); f.message('正常'); f.message('正常。')
   f.b.mem.appendRecent = async () => { throw Error('disk failure') }
   f.end(1); f.end(1); await tick(); assert.equal(f.sent.length, 1)
-  assert.equal(f.sent[0].params.message[0].data.text, '正常')
+  assert.equal(f.sent[0].params.message[0].data.text, '正常。')
 })
 test('late tool acknowledgement cannot claim next turn or a replacement chat', async () => {
   const f = fixture(); f.start(1); const sent = f.b.trackTextSend('front', f.key)
