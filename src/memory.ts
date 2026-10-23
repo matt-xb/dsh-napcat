@@ -279,7 +279,9 @@ export class MemoryStore {
     type Row = { t: number; nick: string; text: string }
     // 归一化：把 [图片:<文件名>] 视作 [图片]，否则同一张图会被"实时带文件名 / 历史只有占位符"记成两条
     const normText = (text: string): string => text.replace(/\[图片:[^\]]*\]/g, '[图片]').trim()
-    const keyOf = (row: Row): string => row.t + '|' + normText(row.text)
+    // 时间容差：历史接口是秒级、实时是毫秒级，同一条消息可能差 1~3 秒 → 用 5 秒窗口判重
+    const timeKey = (t: number): number => Math.floor(t / 5000)
+    const bucketOf = (row: Row): string => timeKey(row.t) + '|' + normText(row.text)
     /** 两条记录里挑更完整的：有昵称优先，其次文本更长（带缓存文件名）。 */
     const better = (left: Row, right: Row): Row => {
       const leftRich = left.nick !== '' && left.nick !== '?'
@@ -296,7 +298,7 @@ export class MemoryStore {
         try {
           const row = JSON.parse(line) as Row
           if (typeof row.t === 'number') {
-            const key = keyOf(row)
+            const key = bucketOf(row)
             const previous = merged.get(key)
             merged.set(key, previous === undefined ? row : better(previous, row))
           }
@@ -314,9 +316,22 @@ export class MemoryStore {
         nick: entry.nick.slice(0, 24),
         text: entry.text.slice(0, 500),
       }
-      const key = keyOf(row)
+      const key = bucketOf(row)
       const previous = merged.get(key)
-      merged.set(key, previous === undefined ? row : better(previous, row))
+      if (previous !== undefined) {
+        merged.set(key, better(previous, row))
+      } else {
+        // 桶边界兜底：前后各 1 秒内已有同内容也算同一条
+        let matched = false
+        for (const [existingKey, existingRow] of merged) {
+          if (normText(existingRow.text) === normText(row.text) && Math.abs(existingRow.t - row.t) <= 3000) {
+            merged.set(existingKey, better(existingRow, row))
+            matched = true
+            break
+          }
+        }
+        if (!matched) merged.set(key, row)
+      }
     }
     const rows = [...merged.values()].sort((left, right) => left.t - right.t).slice(-this.opts.recentLimit)
     await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n') + '\n', 'utf8')
