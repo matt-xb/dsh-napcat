@@ -56,6 +56,8 @@ export declare class Bridge {
     private readonly chatter;
     /** 已投递主动发言请求、等待回复拦截的聊天。 */
     private readonly pendingProactive;
+    /** 上次「被硬门挡住」的提示时间（防刷屏，每群 10 分钟一条）。 */
+    private readonly proactiveNoticeAt;
     /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
     private noteChatter;
     /**

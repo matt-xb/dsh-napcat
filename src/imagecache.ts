@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { downloadToFile } from './media.js'
@@ -102,12 +102,16 @@ export class ImageCache {
     const safe = input.name.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_').slice(0, 40)
     const fileName = hash + '-' + safe
     const target = join(dir, fileName)
+    // 去重：同一天里已有同 hash 的任意文件（downloadToFile 会自己改名字，所以按前缀找）
     try {
-      // 去重：同一天同 hash 已存在
-      const existing = await stat(target)
-      if (existing.size > 0) return { path: target, name: fileName, bytes: existing.size }
+      const entries = await readdir(dir)
+      const hit = entries.find(entry => entry.startsWith(hash + '-'))
+      if (hit !== undefined) {
+        const info = await stat(join(dir, hit))
+        if (info.size > 0) return { path: join(dir, hit), name: hit, bytes: info.size }
+      }
     } catch {
-      // 不存在，继续
+      // 目录不存在
     }
     if ((await this.countToday(now)) >= this.opts.dailyCap) {
       this.opts.log('debug', '图片缓存达到每日上限，跳过: ' + input.chatKey)
@@ -116,16 +120,33 @@ export class ImageCache {
     try {
       await mkdir(dir, { recursive: true })
       const saved = await downloadToFile(input.url, dir, fileName, this.opts.maxBytes)
+      // 统一改名为 hash-原名（便于去重与阅读；重名说明并发下已有人存了）
+      let finalPath = saved.path
+      let finalName = saved.path.split(/[\\/]/).pop() ?? fileName
+      try {
+        await rename(saved.path, target)
+        finalPath = target
+        finalName = fileName
+      } catch {
+        // 目标已存在 → 删掉刚下载的重复文件
+        try {
+          await rm(saved.path, { force: true })
+          const info = await stat(target)
+          return { path: target, name: fileName, bytes: info.size }
+        } catch {
+          // 保留原文件名
+        }
+      }
       try {
         await appendFile(
           join(this.root, 'index.jsonl'),
-          JSON.stringify({ t: now, chat: input.chatKey, nick: input.nick.slice(0, 24), file: day + '/' + fileName, bytes: saved.bytes }) + '\n',
+          JSON.stringify({ t: now, chat: input.chatKey, nick: input.nick.slice(0, 24), file: day + '/' + finalName, bytes: saved.bytes }) + '\n',
           'utf8',
         )
       } catch {
         // 索引失败不影响图片
       }
-      return { path: saved.path, name: fileName, bytes: saved.bytes }
+      return { path: finalPath, name: finalName, bytes: saved.bytes }
     } catch (error) {
       this.opts.log('debug', '图片缓存失败: ' + (error instanceof Error ? error.message : String(error)))
       return undefined

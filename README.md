@@ -142,15 +142,43 @@ imageCacheRetentionDays: 7      # 超期目录自动清理
 
 > 设计参考：泊松触达（revive-companion）、概率+阈值（koishi-plugin-imx）、冷却与群隔离（chat-learning）、QQ 官方主动消息频控（每群 20 qpm / 1000 条/天，我们保守到每小时 3 条）。
 
+### 为什么半天没看到它说话？
+
+主动发言是**低频**设计，用真实群聊（134 条消息 / 171 分钟）回放验证过：
+
+| 参数组合 | 171 分钟内平均发言次数 |
+|---|---|
+| λ=1.5、冷却 30、上限 3、门槛 3（旧默认） | 1.22 |
+| **λ=3、冷却 15、上限 4、门槛 2（现默认）** | **2.60** |
+
+想立刻看到效果，临时用这组"测试参数"：
+
+```yaml
+proactiveRatePerHour: 30      # 相当于每条群消息 ~3% 概率
+proactiveCooldownMinutes: 3
+proactiveMaxPerHour: 10
+proactiveMinMessages: 2
+```
+
+日志会说明每次为什么不触发（每群 10 分钟最多一条）：
+
+```
+主动发言暂不触发（距上次发言不足 15 分钟）: group:xxx
+主动发言暂不触发（近 5 分钟少于 2 条他人消息）: group:xxx
+主动发言已触发: group:xxx（poisson）
+主动发言跳过（模型认为没必要）: group:xxx skipStreak=1
+主动发言已发出: group:xxx（本小时第 1 条）
+```
+
 ### 推荐起步值
 
 ``yaml
 proactiveEnabled: true
-proactiveRatePerHour: 1.5      # 平均每小时 1~2 次
-proactiveCooldownMinutes: 30
+proactiveRatePerHour: 3        # 活跃群平均约每小时 1 次（受冷却与上限约束）
+proactiveCooldownMinutes: 15
 proactiveMaxPerHour: 3
 proactiveQuietHours: "00:00-08:00"
-proactiveMinMessages: 3
+proactiveMinMessages: 2
 proactiveWindowMinutes: 5
 ``
 
@@ -232,12 +260,12 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `imageCacheDailyCap` | `100` | 每个聊天每天最多缓存张数 |
 | `imageCacheRetentionDays` | `7` | 图片缓存保留天数（超期自动清理） |
 | `proactiveEnabled` | `false` | 主动发言（伪人模式）总开关 |
-| `proactiveRatePerHour` | `1.5` | 泊松 λ：每小时期望主动发言次数（0=改用固定概率） |
+| `proactiveRatePerHour` | `3` | 泊松 λ：每小时期望主动发言次数（0=改用固定概率） |
 | `proactiveChance` | `0.02` | 固定概率模式的插话概率（λ>0 时不生效） |
-| `proactiveCooldownMinutes` | `30` | 两次主动发言最小间隔 |
-| `proactiveMaxPerHour` | `3` | 每小时最多主动发言次数 |
+| `proactiveCooldownMinutes` | `15` | 两次主动发言最小间隔 |
+| `proactiveMaxPerHour` | `4` | 每小时最多主动发言次数 |
 | `proactiveQuietHours` | `00:00-08:00` | 静默时段（逗号分隔多段） |
-| `proactiveMinMessages` | `3` | 窗口内至少多少条他人消息才考虑 |
+| `proactiveMinMessages` | `2` | 窗口内至少多少条他人消息才考虑 |
 | `proactiveWindowMinutes` | `5` | 观察窗口（分钟） |
 | `agentPreset` | `''` | 会话使用的 preset（留空=宿主默认） |
 | `provider` / `model` | `''` | 覆盖模型（留空=宿主默认模型） |
