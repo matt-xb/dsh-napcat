@@ -164,7 +164,7 @@ export function parsePersonaOverrides(raw: string): Map<string, string> {
     if (at <= 0) continue
     const key = trimmed.slice(0, at).trim()
     const text = trimmed.slice(at + 1).trim()
-    if (!/^(group|private)[:：].+/.test(key) || text === '') continue
+    if (!/^(group|private)[:：](?:\d+|\*)$/.test(key) || text === '') continue
     map.set(key.replace('：', ':'), text)
   }
   return map

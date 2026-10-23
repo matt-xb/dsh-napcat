@@ -4,7 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MemoryStore } from '../lib/memory.js'
-import { replyDedupKey, sanitizeOutgoingMessage, sanitizeReply } from '../lib/text.js'
+import { parsePersonaOverrides, replyDedupKey, sanitizeOutgoingMessage, sanitizeReply } from '../lib/text.js'
+
+test('personas retain exact and wildcard keys without admitting malformed scope keys', () => {
+  const parsed = parsePersonaOverrides('group:*=group\nprivate：*=private\nprivate:42=exact\nprivate:../escape=bad\ngroup:*=last\nprivate:43=')
+  assert.deepEqual([...parsed], [['group:*', 'last'], ['private:*', 'private'], ['private:42', 'exact']])
+})
 
 test('short Chinese punctuation dedup preserves questions, numbers and code', () => {
   assert.equal(replyDedupKey('你好，世界。'), replyDedupKey('你好世界'))

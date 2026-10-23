@@ -51,7 +51,7 @@ export declare class MemoryStore {
     dumpTurnState(chatKey: string, agent: unknown): Promise<void>;
     /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
     saveSpace(chatKey: string, spaceId: string): Promise<void>;
-    /** 写一条长期记忆：优先 mnemon，失败落 notes.md。 */
+    /** 明确事实始终保存本地，可选同步本聊天 mnemon。 */
     remember(chatKey: string, content: string, agent: unknown, tags?: readonly string[]): Promise<string>;
     /** 召回与本群相关的内容（query 用最近对话摘要）。 */
     recall(chatKey: string, query: string, agent: unknown): Promise<string>;

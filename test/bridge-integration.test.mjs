@@ -32,6 +32,41 @@ function fixture(kind = 'group') {
   const end = turn => emit('turn/end', { turn, reason: { kind: 'completed' } })
   return { b, ctx, conn, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, exec: { agent } }
 }
+test('accepted input is persisted before chat creation and current words participate in recall', async () => {
+  const f = fixture('private'), sequence = []
+  f.b.mem.appendRecent = async (key, row) => { await Promise.resolve(); sequence.push(['append', key, row]) }
+  f.b.mem.dumpTurnState = async () => {}
+  f.b.mem.readRecent = async () => ['earlier topic', 'sender: current seaside request']
+  f.b.mem.recall = async (key, query) => { sequence.push(['recall', key, query]); return 'saved evidence' }
+  f.b.mem.ensureSpace = async () => undefined
+  f.b.ensureChat = async () => { sequence.push(['ensure']); return f.chat }
+  f.b.resolveInboundMedia = async () => ({ notes: [], blocks: [], parts: [] })
+  f.b.dispatch = (_chat, text) => sequence.push(['dispatch', text])
+  await f.b.handleEventInner({ post_type: 'message', message_type: 'private', user_id: 100, message: 'current seaside request', sender: { nickname: 'sender' } })
+  assert.equal(sequence[0][0], 'append'); assert.equal(sequence[0][1], 'private:100')
+  assert.equal(sequence[0][2].role, 'user'); assert.equal(sequence[1][0], 'ensure')
+  assert.match(sequence.find(row => row[0] === 'recall')[2], /current seaside request/)
+  assert.equal(sequence.at(-1)[0], 'dispatch')
+})
+
+test('group memory command removes only the bot mention and retains exact scope and original fact', async () => {
+  const f = fixture('group'), records = []; f.b.opts.conn.selfId = '99'
+  f.b.opts.config.requireMention = true; f.b.opts.config.triggerKeywords = ['trigger']; f.b.opts.config.memoryBackend = 'file'
+  f.b.mem.appendRecent = async () => {}; f.b.mem.dumpTurnState = async () => {}
+  f.b.mem.remember = async (key, text, _agent, tags) => { records.push({ key, text, tags }); return 'ok' }
+  f.b.ensureChat = async () => f.chat; f.b.sendText = async () => {}
+  f.b.dispatch = () => assert.fail('explicit memory command must not need a model turn')
+  await f.b.handleEventInner({ post_type: 'message', message_type: 'group', group_id: 200, user_id: 100,
+    message: [{ type: 'at', data: { qq: '99' } }, { type: 'text', data: { text: ' trigger记住：likes seaside' } }] })
+  assert.deepEqual(records, [{ key: 'group:200', text: 'likes seaside', tags: ['group:200'] }])
+})
+
+test('recall evidence stays ahead of long recent context and both are untrusted quotes', () => {
+  const f = fixture('private'); f.b.mem.opts.injectMaxChars = 220
+  const text = f.b.mem.buildInjection({ chatKey: 'private:100', recent: ['x'.repeat(1000)], recallText: 'specific historical evidence' })
+  assert.match(text, /specific historical evidence/); assert.match(text, /不可信引用/)
+})
+
 for (const kind of ['private', 'group']) {
   test(kind + ': acknowledged text owns final outlet, including punctuation rewrites, and next turn resets', async () => {
     const f = fixture(kind); f.start(1)
