@@ -54,6 +54,8 @@ export declare class Bridge {
     private readonly proactiveStates;
     /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */
     private readonly chatter;
+    /** 首次计数时用历史缓冲回填窗口的 promise：判定前要等它，否则重启后会误判「只有 1 条」。 */
+    private readonly chatterReady;
     /** 已投递主动发言请求、等待回复拦截的聊天。 */
     private readonly pendingProactive;
     /** 上次「被硬门挡住」的提示时间（防刷屏，每群 10 分钟一条）。 */

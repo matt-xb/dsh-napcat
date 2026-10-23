@@ -222,6 +222,8 @@ export class Bridge {
   private readonly proactiveStates = new Map<string, ChatProactiveState>()
   /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */
   private readonly chatter = new Map<string, number[]>()
+  /** 首次计数时用历史缓冲回填窗口的 promise：判定前要等它，否则重启后会误判「只有 1 条」。 */
+  private readonly chatterReady = new Map<string, Promise<void>>()
   /** 已投递主动发言请求、等待回复拦截的聊天。 */
   private readonly pendingProactive = new Set<string>()
   /** 上次「被硬门挡住」的提示时间（防刷屏，每群 10 分钟一条）。 */
@@ -237,11 +239,12 @@ export class Bridge {
     this.chatter.set(ref.key, list)
     // 重启后第一次计数：用缓冲里的历史时间戳补齐（否则"近 10 分钟"永远从 0 开始，刚重启就被拦）
     if (cached === undefined && this.opts.config.proactiveEnabled) {
-      void this.mem.recentTimestamps(ref.key, 200).then(stamps => {
+      const seeding = this.mem.recentTimestamps(ref.key, 200).then(stamps => {
         const merged = [...stamps, ...(this.chatter.get(ref.key) ?? [])].filter(at => Date.now() - at < windowMs)
         merged.sort((left, right) => left - right)
         this.chatter.set(ref.key, merged)
       })
+      this.chatterReady.set(ref.key, seeding.then(() => undefined, () => undefined))
     }
   }
 
@@ -255,6 +258,11 @@ export class Bridge {
     const state = this.proactiveStates.get(ref.key) ?? newChatState()
     const now = Date.now()
     const windowMs = cfg.proactiveWindowMinutes * 60_000
+    // 重启后的第一轮：等历史回填完成再判定，否则会拿"只有 1 条"去跟门槛比
+    const pendingSeed = this.chatterReady.get(ref.key)
+    if (pendingSeed !== undefined) {
+      await pendingSeed.catch(() => undefined)
+    }
     const recentOthers = (this.chatter.get(ref.key) ?? []).filter(at => now - at < windowMs).length
     const local = new Date(now)
     const decision = decide({
