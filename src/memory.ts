@@ -226,6 +226,8 @@ export class MemoryStore {
   /** 召回与本群相关的内容（query 用最近对话摘要）。 */
   async recall(chatKey: string, query: string, agent: unknown): Promise<string> {
     if (query.trim() === '') return ''
+    // mnemon 的读取要求本轮 View，插件在轮次外调用必失败（会返回 Error 文本）→ 交给模型轮内显式回忆
+    if (this.opts.backend === 'mnemon') return ''
     const id = await this.ensureSpace(chatKey, agent)
     if (id !== undefined) {
       try {

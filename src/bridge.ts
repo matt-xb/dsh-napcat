@@ -275,6 +275,18 @@ export class Bridge {
         return
       }
       if (/^记忆\s*$/.test(commandText)) {
+        if (this.opts.config.memoryBackend === 'mnemon') {
+          // mnemon 的读取需要本轮 View，插件在轮次外调用必失败 → 交给模型在轮内显式回忆
+          const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
+          const recentForQuery = await this.mem.readRecent(ref.key, 5)
+          await this.dispatch(chat,
+            '[记忆查询] 请用 mnemon_recall 检索本群长期记忆并直接回答用户。\n'
+            + '空间 id：' + (spaceId ?? '（未配置，见上文说明）') + '\n'
+            + '查询词（可用最近群聊推断）：' + (recentForQuery.join(' ') || '本群记忆')
+            + '\n如果检索不到，就直说「本群还没有相关记忆」；不要把工具报错原文发给用户。',
+            [], [])
+          return
+        }
         const recentForQuery = await this.mem.readRecent(ref.key, 10)
         const recalled = await this.mem.recall(ref.key, recentForQuery.join(' '), chat.agent)
         await this.sendText(chat, recalled === '' ? '本群还没有长期记忆' : '本群记忆（相关片段）：\n' + recalled)
