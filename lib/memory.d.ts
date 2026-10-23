@@ -6,8 +6,10 @@ export interface MemoryOptions {
     root: string;
     /** mnemon 空间名前缀 */
     spacePrefix: string;
-    /** 长期记忆后端：mnemon（每群一空间）或 file（纯本地） */
+    /** 长期记忆后端：mnemon（交给模型写）或 file（纯本地） */
     backend: 'mnemon' | 'file';
+    /** 配置里手填的空间 id（group:<号>=<id> 多行） */
+    spaces?: string;
     /** recent.jsonl 保留条数 */
     recentLimit: number;
     /** 注入最近多少条对话 */
@@ -19,6 +21,8 @@ export interface MemoryOptions {
 export interface ChatLike {
     agent?: unknown;
 }
+/** 解析 group:<群号>=<id> 多行配置。 */
+export declare function parseSpaceMap(raw: string): Record<string, string>;
 export declare class MemoryStore {
     private readonly opts;
     constructor(opts: MemoryOptions);
@@ -33,6 +37,8 @@ export declare class MemoryStore {
     private reportFailure;
     /** 拿到（或创建）本聊天的 mnemon 空间 id；失败返回 undefined（自动退化为文件记忆）。 */
     ensureSpace(chatKey: string, agent: unknown): Promise<string | undefined>;
+    /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
+    saveSpace(chatKey: string, spaceId: string): Promise<void>;
     /** 写一条长期记忆：优先 mnemon，失败落 notes.md。 */
     remember(chatKey: string, content: string, agent: unknown, tags?: readonly string[]): Promise<string>;
     /** 召回与本群相关的内容（query 用最近对话摘要）。 */
@@ -61,5 +67,6 @@ export declare class MemoryStore {
         recent: readonly string[];
         recallText?: string;
         mention?: string;
+        spaceId?: string;
     }): string;
 }

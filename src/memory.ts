@@ -11,8 +11,10 @@ export interface MemoryOptions {
   root: string
   /** mnemon 空间名前缀 */
   spacePrefix: string
-  /** 长期记忆后端：mnemon（每群一空间）或 file（纯本地） */
+  /** 长期记忆后端：mnemon（交给模型写）或 file（纯本地） */
   backend: 'mnemon' | 'file'
+  /** 配置里手填的空间 id（group:<号>=<id> 多行） */
+  spaces?: string
   /** recent.jsonl 保留条数 */
   recentLimit: number
   /** 注入最近多少条对话 */
@@ -95,6 +97,16 @@ function findIdByName(raw: string, name: string): string | undefined {
   return match?.[1]
 }
 
+/** 解析 group:<群号>=<id> 多行配置。 */
+export function parseSpaceMap(raw: string): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const line of raw.split(/\r?\n/)) {
+    const match = /^\s*(group|private):(\d+)\s*=\s*(\S+)\s*$/.exec(line)
+    if (match !== null) map[match[1] + ':' + match[2]] = match[3] as string
+  }
+  return map
+}
+
 export class MemoryStore {
   constructor(private readonly opts: MemoryOptions) {}
 
@@ -143,45 +155,30 @@ export class MemoryStore {
   /** 拿到（或创建）本聊天的 mnemon 空间 id；失败返回 undefined（自动退化为文件记忆）。 */
   async ensureSpace(chatKey: string, agent: unknown): Promise<string | undefined> {
     if (this.opts.backend === 'file') return undefined
+    // mnemon 的记忆操作要求"本轮 turn 的 View"，插件在轮次外调用会被拒 →
+    // 空间 id 必须由用户在配置里给出（memorySpaces），插件不再自己创建/查询。
+    const configured = parseSpaceMap(this.opts.spaces ?? '')[chatKey]
+    if (configured !== undefined && configured !== '') return configured
+    try {
+      const cached = JSON.parse(await readFile(join(this.dirFor(chatKey), SPACE_FILE), 'utf8')) as { id?: string }
+      if (typeof cached.id === 'string' && cached.id !== '') return cached.id
+    } catch {
+      // 无缓存
+    }
+    return undefined
     try {
       const dir = await this.ensureDir(chatKey)
-      const cachePath = join(dir, SPACE_FILE)
-      try {
-        const cached = JSON.parse(await readFile(cachePath, 'utf8')) as { id?: string }
-        if (typeof cached.id === 'string' && cached.id !== '') return cached.id
-      } catch {
-        // 没有缓存
-      }
-      const name = this.opts.spacePrefix + chatKey
-      // 创建（返回值不一定带 id，所以随后用 bodies 回查）
-      try {
-        await this.callTool('mnemon_memory_body_create', {
-          name,
-          description: 'QQ ' + chatKey + ' 的长期记忆（dsh-napcat 自动维护）',
-        }, agent)
-      } catch (error) {
-        this.opts.log('debug', 'memory_body_create 失败（可能已存在）: ' + (error instanceof Error ? error.message : String(error)))
-      }
-      const catalog = await this.callTool('mnemon_memory_bodies', {}, agent)
-      this.dumpRaw('bodies', catalog)
-      const id = findIdByName(catalog, name) ?? findId(catalog)
-      if (id === undefined) this.dumpRaw('未能从目录解析出 id', catalog)
-      if (id !== undefined) {
-        // 新建空间默认 active=false，写入前必须激活（否则 mnemon_remember 会拒绝）
-        try {
-          await this.callTool('mnemon_memory_body_update', { memoryBodyId: id, active: true }, agent)
-        } catch (error) {
-          this.opts.log('debug', '激活记忆空间失败: ' + (error instanceof Error ? error.message : String(error)))
-        }
-      }
-      if (id === undefined || id === '') return undefined
-      await writeFile(cachePath, JSON.stringify({ name, id }, null, 2), 'utf8')
-      this.opts.log('info', '已创建记忆空间: ' + name + ' (' + id + ')')
-      return id
+      return undefined
     } catch (error) {
       this.reportFailure('记忆空间不可用，退化为本地笔记', error)
       return undefined
     }
+  }
+
+  /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
+  async saveSpace(chatKey: string, spaceId: string): Promise<void> {
+    const dir = await this.ensureDir(chatKey)
+    await writeFile(join(dir, SPACE_FILE), JSON.stringify({ id: spaceId }, null, 2), 'utf8')
   }
 
   /** 写一条长期记忆：优先 mnemon，失败落 notes.md。 */
@@ -314,7 +311,7 @@ export class MemoryStore {
   }
 
   /** 组装注入文本（含 @ 优先级指令），超预算截断。 */
-  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string }): string {
+  buildInjection(parts: { chatKey: string; recent: readonly string[]; recallText?: string; mention?: string; spaceId?: string }): string {
     const blocks: string[] = []
     blocks.push('这个会话来自 QQ（NapCat 渠道），聊天对象是 ' + parts.chatKey + '。')
     if (parts.mention !== undefined && parts.mention !== '') {
@@ -322,6 +319,17 @@ export class MemoryStore {
     }
     if (parts.recent.length > 0) {
       blocks.push('【最近群聊（背景，用于理解话题，不要逐条回应）】\n' + parts.recent.join('\n'))
+    }
+    if (this.opts.backend === 'mnemon') {
+      if (parts.spaceId !== undefined && parts.spaceId !== '') {
+        blocks.push('【本群长期记忆（mnemon）】空间 id = ' + parts.spaceId + '\n' +
+          '要记住重要信息时调用：mnemon_remember({ memoryBodyId: "' + parts.spaceId + '", content: "…", tags: ["napcat","' + parts.chatKey + '"] })\n' +
+          '需要回忆时调用：mnemon_recall({ memoryBodyIds: ["' + parts.spaceId + '"], query: "…" })')
+      } else {
+        blocks.push('【本群长期记忆（mnemon）尚未配置空间 id】\n' +
+          '本群还没有记忆空间。需要长期记住信息前：先 mnemon_memory_body_create({ name: "' + this.opts.spacePrefix + parts.chatKey + '", description: "QQ ' + parts.chatKey + ' 的长期记忆" })，' +
+          '再 mnemon_memory_body_update({ memoryBodyId: <id>, active: true })，然后调用 napcat_memory_space({ group_id: "' + parts.chatKey.split(':')[1] + '", space_id: <id> }) 让插件记住这个 id。')
+      }
     }
     if (parts.recallText !== undefined && parts.recallText !== '') {
       blocks.push('【本群长期记忆（相关片段）】\n' + parts.recallText)

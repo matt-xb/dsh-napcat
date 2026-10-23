@@ -52,6 +52,7 @@ export interface Config {
     memoryEnabled: boolean;
     memoryBackend: 'mnemon' | 'file';
     memorySpacePrefix: string;
+    memorySpaces: string;
     recentLimit: number;
     injectRecent: number;
     injectMaxChars: number;

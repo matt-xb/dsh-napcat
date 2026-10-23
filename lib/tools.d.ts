@@ -8,5 +8,7 @@ export interface ToolDeps {
     maxFileBytes?: number;
     /** 允许操作的群号（群文件工具用），省略=不限制 */
     allowedGroups?: () => readonly string[];
+    /** 把 chatKey → mnemon 空间 id 写进插件缓存 */
+    rememberSpace?: (chatKey: string, spaceId: string) => Promise<void>;
 }
 export declare function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void, deps?: ToolDeps): void;

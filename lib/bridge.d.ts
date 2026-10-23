@@ -40,6 +40,8 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    /** 供 napcat_memory_space 工具登记空间 id。 */
+    saveMemorySpace(chatKey: string, spaceId: string): Promise<void>;
     /** 缓冲不足时才预热；同一聊天 5 分钟内最多尝试一次。 */
     private maybeWarmup;
     /** 用 NapCat 的历史消息接口预热 recent 缓冲（群 get_group_msg_history / 私聊 get_friend_msg_history）。 */
