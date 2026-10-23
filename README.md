@@ -98,6 +98,9 @@ imageCacheRetentionDays: 7      # 超期目录自动清理
 - **聊天记录里会写成** `[图片:<文件名>]` → 之后模型需要时用 `read_image("/…/imgs/20261023/xxx.jpg")` 回看
 - **去重**：按图片 URL 的 hash，同一张图重复发只存一份
 - **表情**：`[表情]` 段记进 `imgs/faces.jsonl`（谁爱用什么表情，可做后续统计）
+- **历史图片也会缓存**：消息里存的图片 URL 会过期，但 `file` id 还能用 `get_image` 重新解析 → 预热时逐张尝试：成功就落盘并写成 `[图片:<文件名>]`，解析失败（撤回/过期）标 `[图片(已过期)]`
+  - 开关：`warmupImages`（默认开）、`warmupImageLimit`（单次预热最多 10 张，另有每日配额兜底）
+- **合并永不降级**：同一条消息的两次记录（实时 `[图片:文件名]` / 历史 `[图片]`）合并时**逐字段取优**——时间取更早、昵称取非空、文本取更长 ⇒ 带文件名的记录不会被降级成 `[图片]` ✓
 - **记忆里不写图片字节**：mnemon 只记"谁爱发什么梗/图"这类结论（自动捕获规则会处理），避免把空间撑爆
 
 > 磁盘提示：`all` 模式按 100 张/天/群 + 7 天保留，单群稳定在几百 MB 以内；像 `E:\dsnworkspace\napcat\group-xxx\napcat-inbox\imgs` 可随时手动清空。
@@ -254,6 +257,8 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `injectRecent` | `20` | 每次触发注入最近对话条数（直接影响 token 成本） |
 | `injectMaxChars` | `4000` | 记忆注入总字符上限（超出截断并提示压缩） |
 | `warmupHistory` | `0` | 预热目标条数（0=关闭）；缓冲不足时用历史接口补齐 |
+| `warmupImages` | `true` | 预热时也缓存历史消息里的图片（file id 失效则记 `[图片(已过期)]`） |
+| `warmupImageLimit` | `10` | 单次预热最多下载几张历史图片 |
 | `warmupStaleMinutes` | `10` | 缓冲最新一条超过多少分钟视为过期、需要重新预热 |
 | `imageCache` | `off` | 群聊图片缓存：`all`=把群里的图片/表情包也落盘（默认只在叫到机器人时存） |
 | `imageCacheMaxBytes` | `2097152` | 单张图片缓存上限（2MB） |

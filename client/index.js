@@ -62,6 +62,8 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'injectMaxChars', label: '记忆注入字符上限', kind: 'number' },
         { key: 'warmupHistory', label: '预热条数：缓冲不足就拉历史（0=关闭）', kind: 'number' },
         { key: 'warmupStaleMinutes', label: '预热新鲜度：最新一条超过多少分钟视为过期', kind: 'number' },
+        { key: 'warmupImages', label: '预热时也缓存历史图片（file id 失效则标记已过期）', kind: 'boolean' },
+        { key: 'warmupImageLimit', label: '单次预热最多下载几张历史图片', kind: 'number' },
         { key: 'proactiveEnabled', label: '主动发言（伪人模式）：群里有话题时自己插话', kind: 'boolean' },
         { key: 'proactiveRatePerHour', label: '主动发言频率 λ（次/小时，0=改用固定概率）', kind: 'number' },
         { key: 'proactiveChance', label: '固定概率模式的插话概率（0~1）', kind: 'number' },

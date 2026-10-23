@@ -74,6 +74,8 @@ export interface Config {
   injectMaxChars: number
   warmupHistory: number
   warmupStaleMinutes: number
+  warmupImages: boolean
+  warmupImageLimit: number
 }
 
 export const Config: Z<Config> = z.object({
@@ -147,6 +149,8 @@ export const Config: Z<Config> = z.object({
   injectMaxChars: z.natural().default(4000).description('记忆注入总字符上限').volatile(),
   warmupHistory: z.natural().default(0).description('预热条数：缓冲不足这个条数就拉历史补齐（0=关闭）').volatile(),
   warmupStaleMinutes: z.natural().default(10).description('预热新鲜度：缓冲最新一条超过这么多分钟也算过期，会重新拉历史').volatile(),
+  warmupImages: z.boolean().default(true).description('预热时把历史消息里的图片也缓存（用 file id 重新解析，解析不了=已过期）').volatile(),
+  warmupImageLimit: z.natural().default(10).description('单次预热最多下载几张历史图片（每日配额之外的保护）').volatile(),
 }) as unknown as Z<Config>
 
 /** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */
@@ -197,6 +201,8 @@ export const DEFAULTS: Config = {
   injectMaxChars: 4000,
   warmupHistory: 0,
   warmupStaleMinutes: 10,
+  warmupImages: true,
+  warmupImageLimit: 10,
 }
 
 /** volatile 字段在运行时是 `{ get(): T }` 的稳定引用（cosmokit 的 Volatile）。 */
