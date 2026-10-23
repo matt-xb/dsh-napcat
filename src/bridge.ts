@@ -242,6 +242,7 @@ export class Bridge {
     }
 
     const chat = await this.ensureChat(ref)
+    if (this.opts.config.memoryEnabled) void this.mem.dumpTurnState(ref.key, chat.agent)
 
     // 记忆命令（插件直写，不经过模型）
     if (this.opts.config.memoryEnabled) {
