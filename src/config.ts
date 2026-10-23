@@ -55,6 +55,14 @@ export interface Config {
   memoryEnabled: boolean
   memoryBackend: 'mnemon' | 'file'
   memoryAutoCapture: boolean
+  proactiveEnabled: boolean
+  proactiveRatePerHour: number
+  proactiveChance: number
+  proactiveCooldownMinutes: number
+  proactiveMaxPerHour: number
+  proactiveQuietHours: string
+  proactiveMinMessages: number
+  proactiveWindowMinutes: number
   memorySpacePrefix: string
   memorySpaces: string
   recentLimit: number
@@ -115,6 +123,14 @@ export const Config: Z<Config> = z.object({
     .description('日志级别').volatile(),
   memoryEnabled: z.boolean().default(true).description('开启群记忆（最近对话缓冲 + 长期记忆）').volatile(),
   memoryAutoCapture: z.boolean().default(true).description('自动记忆：模型自己判断并写入群设定/黑话/人物关系，无需用户说「记住」').volatile(),
+  proactiveEnabled: z.boolean().default(false).description('主动发言（伪人模式）：群里有话题时自己插话（默认关闭）').volatile(),
+  proactiveRatePerHour: z.number().default(1.5).description('泊松 λ：每小时期望主动发言次数（0=改用固定概率）').volatile(),
+  proactiveChance: z.number().default(0.02).description('固定概率模式：每条群消息的插话概率（proactiveRatePerHour>0 时不生效）').volatile(),
+  proactiveCooldownMinutes: z.number().default(30).description('两次主动发言的最小间隔（分钟）').volatile(),
+  proactiveMaxPerHour: z.number().default(3).description('每小时最多主动发言次数').volatile(),
+  proactiveQuietHours: z.string().default('00:00-08:00').description('静默时段，如 00:00-08:00,12:00-13:00').volatile(),
+  proactiveMinMessages: z.number().default(3).description('观察窗口内至少多少条他人消息才考虑插话').volatile(),
+  proactiveWindowMinutes: z.number().default(5).description('观察窗口（分钟）').volatile(),
   memoryBackend: z.union([z.const('mnemon'), z.const('file')]).default('mnemon').description('长期记忆后端：file=本地文件（推荐，插件自管）；mnemon=交给模型用 mnemon 工具写（需在本群配置 memorySpaces）').volatile(),
   memorySpaces: z.string().default('').description('mnemon 后端用：每行 group:<群号>=<记忆空间id>（在 mnemon 面板建好空间后填 id）').volatile(),
   memorySpacePrefix: z.string().default('napcat-').description('每群一个 mnemon 记忆空间，空间名前缀').volatile(),
@@ -153,6 +169,14 @@ export const DEFAULTS: Config = {
   logLevel: 'info',
   memoryEnabled: true,
   memoryAutoCapture: true,
+  proactiveEnabled: false,
+  proactiveRatePerHour: 1.5,
+  proactiveChance: 0.02,
+  proactiveCooldownMinutes: 30,
+  proactiveMaxPerHour: 3,
+  proactiveQuietHours: '00:00-08:00',
+  proactiveMinMessages: 3,
+  proactiveWindowMinutes: 5,
   memoryBackend: 'mnemon',
   memorySpaces: '',
   memorySpacePrefix: 'napcat-',

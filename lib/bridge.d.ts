@@ -40,6 +40,20 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    /** 每聊天的主动发言状态。 */
+    private readonly proactiveStates;
+    /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */
+    private readonly chatter;
+    /** 已投递主动发言请求、等待回复拦截的聊天。 */
+    private readonly pendingProactive;
+    /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
+    private noteChatter;
+    /**
+     * 判断并（可能）主动插话。只在群里、且用户没叫它的时候调用。
+     * 判定不通过就什么都不做；通过则投递一条 [主动发言] 请求，由模型决定说还是回 __SKIP__。
+     */
+    private maybeInterject;
+    /** 供 napcat_memory_space 工具登记空间 id。 */
     /** 供 napcat_memory_space 工具登记空间 id。 */
     saveMemorySpace(chatKey: string, spaceId: string): Promise<void>;
     /** 缓冲不足时才预热；同一聊天 5 分钟内最多尝试一次。 */

@@ -62,6 +62,14 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'injectMaxChars', label: '记忆注入字符上限', kind: 'number' },
         { key: 'warmupHistory', label: '预热条数：缓冲不足就拉历史（0=关闭）', kind: 'number' },
         { key: 'warmupStaleMinutes', label: '预热新鲜度：最新一条超过多少分钟视为过期', kind: 'number' },
+        { key: 'proactiveEnabled', label: '主动发言（伪人模式）：群里有话题时自己插话', kind: 'boolean' },
+        { key: 'proactiveRatePerHour', label: '主动发言频率 λ（次/小时，0=改用固定概率）', kind: 'number' },
+        { key: 'proactiveChance', label: '固定概率模式的插话概率（0~1）', kind: 'number' },
+        { key: 'proactiveCooldownMinutes', label: '两次主动发言最小间隔（分钟）', kind: 'number' },
+        { key: 'proactiveMaxPerHour', label: '每小时最多主动发言次数', kind: 'number' },
+        { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
+        { key: 'proactiveMinMessages', label: '窗口内至少多少条他人消息才考虑插话', kind: 'number' },
+        { key: 'proactiveWindowMinutes', label: '观察窗口（分钟）', kind: 'number' },
       ]
 
       const NS = 'dsh-napcat'

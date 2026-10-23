@@ -52,6 +52,14 @@ export interface Config {
     memoryEnabled: boolean;
     memoryBackend: 'mnemon' | 'file';
     memoryAutoCapture: boolean;
+    proactiveEnabled: boolean;
+    proactiveRatePerHour: number;
+    proactiveChance: number;
+    proactiveCooldownMinutes: number;
+    proactiveMaxPerHour: number;
+    proactiveQuietHours: string;
+    proactiveMinMessages: number;
+    proactiveWindowMinutes: number;
     memorySpacePrefix: string;
     memorySpaces: string;
     recentLimit: number;

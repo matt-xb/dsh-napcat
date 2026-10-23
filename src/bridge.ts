@@ -26,6 +26,7 @@ import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.j
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
+import { decide, newChatState, parseQuietHours, pruneSentAt, type ChatProactiveState } from './proactive.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import type { ObEvent, ObMessageEvent, ObSegment } from './types.js'
@@ -148,6 +149,98 @@ export class Bridge {
     }
   }
 
+  // ── 主动发言（伪人模式）──
+  /** 每聊天的主动发言状态。 */
+  private readonly proactiveStates = new Map<string, ChatProactiveState>()
+  /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */
+  private readonly chatter = new Map<string, number[]>()
+  /** 已投递主动发言请求、等待回复拦截的聊天。 */
+  private readonly pendingProactive = new Set<string>()
+
+  /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
+  private noteChatter(ref: ChatRef): void {
+    const now = Date.now()
+    const windowMs = this.opts.config.proactiveWindowMinutes * 60_000
+    const list = (this.chatter.get(ref.key) ?? []).filter(at => now - at < windowMs)
+    list.push(now)
+    this.chatter.set(ref.key, list)
+  }
+
+  /**
+   * 判断并（可能）主动插话。只在群里、且用户没叫它的时候调用。
+   * 判定不通过就什么都不做；通过则投递一条 [主动发言] 请求，由模型决定说还是回 __SKIP__。
+   */
+  private async maybeInterject(ref: ChatRef): Promise<void> {
+    const cfg = this.opts.config
+    if (!cfg.proactiveEnabled || ref.kind !== 'group') return
+    const state = this.proactiveStates.get(ref.key) ?? newChatState()
+    const now = Date.now()
+    const windowMs = cfg.proactiveWindowMinutes * 60_000
+    const recentOthers = (this.chatter.get(ref.key) ?? []).filter(at => now - at < windowMs).length
+    const local = new Date(now)
+    const decision = decide({
+      now,
+      minuteOfDay: local.getHours() * 60 + local.getMinutes(),
+      options: {
+        enabled: cfg.proactiveEnabled,
+        ratePerHour: cfg.proactiveRatePerHour,
+        chance: cfg.proactiveChance,
+        cooldownMinutes: cfg.proactiveCooldownMinutes,
+        maxPerHour: cfg.proactiveMaxPerHour,
+        quietHours: cfg.proactiveQuietHours,
+        minMessages: cfg.proactiveMinMessages,
+        windowMinutes: cfg.proactiveWindowMinutes,
+      },
+      state,
+      recentOthers,
+      quietRanges: parseQuietHours(cfg.proactiveQuietHours),
+    })
+    state.lastConsiderAt = now
+    this.proactiveStates.set(ref.key, state)
+    if (!decision.send) {
+      this.opts.log('debug', '主动发言不触发(' + decision.reason + '): ' + ref.key)
+      return
+    }
+    try {
+      const chat = await this.ensureChat(ref)
+      const recent = await this.mem.readRecent(ref.key, this.opts.config.injectRecent)
+      // 主动发言也要带完整记忆块（空间 id / 固定层召回指令 / 自动记忆规则），与 @ 触发时一致
+      let memoryBlock = ''
+      if (this.opts.config.memoryEnabled) {
+        try {
+          const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
+          const recalled = this.opts.config.memoryBackend === 'file'
+            ? await this.mem.recall(ref.key, recent.slice(-5).join(' '), chat.agent)
+            : ''
+          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId })
+        } catch (error) {
+          this.opts.log('debug', '主动发言记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
+        }
+      }
+      this.pendingProactive.add(ref.key)
+      // 接上一句：把最后 2 条（含发言人）单独拎出来，要求话题贴近、不要突然换台
+      const lastTwo = recent.slice(-2)
+      const lastSpeaker = lastTwo.length === 0 ? '' : lastTwo[lastTwo.length - 1] ?? ''
+      const anchorBlock = lastTwo.length === 0
+        ? ''
+        : '【刚才在说的（你必须接住这个，不要换话题）】\n' + lastTwo.join('\n') + '\n\n'
+      await this.dispatch(chat,
+        (memoryBlock === '' ? '' : memoryBlock + '\n\n')
+        + anchorBlock
+        + '[主动发言] 现在是主动插话窗口：接着上面「' + (lastSpeaker === '' ? '最近消息' : lastSpeaker.slice(0, 60)) + '」往下说一句。\n'
+        + '要求：① 不超过 2 句、口语化，不要像播报；② 必须贴着刚才的话题（附和/补充/吐槽/接梗都行），不要另起话题；\n'
+        + '③ 不要重复别人刚说过的话；④ 不要总结、不要列点、不要叫人名字点人；\n'
+        + '⑤ 如果你没什么想说的、或接话会显得多余，就只回复 __SKIP__（三个下划线 + SKIP），我会丢弃这条。',
+        [], [])
+      this.opts.log('info', '主动发言已触发: ' + ref.key + '（' + decision.reason + '）')
+    } catch (error) {
+      this.pendingProactive.delete(ref.key)
+      this.opts.log('debug', '主动发言投递失败: ' + (error instanceof Error ? error.message : String(error)))
+    }
+  }
+
+  /** 供 napcat_memory_space 工具登记空间 id。 */
+
   /** 供 napcat_memory_space 工具登记空间 id。 */
   async saveMemorySpace(chatKey: string, spaceId: string): Promise<void> {
     await this.mem.saveSpace(chatKey, spaceId)
@@ -225,6 +318,8 @@ export class Bridge {
         void this.maybeWarmup(ref)
       }
     }
+    // 主动发言：记录"有人在聊"，判定推迟到门控之后（被 @ 时不插话）
+    this.noteChatter(ref)
 
     if (ref.kind === 'group' && this.opts.config.requireMention) {
       if (selfId === '') {
@@ -237,6 +332,8 @@ export class Bridge {
         const hit = mentions(msg.message, selfId) || repliesToAny(msg.message, recent) || keyword !== undefined
         if (!hit) {
           this.opts.log('debug', '群消息未 @ 机器人且没命中关键字（已记入缓冲）: ' + ref.key)
+          // 没叫它 → 看看要不要主动插一句（判定在 proactive 里）
+          if (this.opts.config.proactiveEnabled) void this.maybeInterject(ref)
           return
         }
       }
@@ -862,8 +959,29 @@ export class Bridge {
     if (event.type === 'turn/end') {
       this.opts.log('debug', 'turn/end 原因: ' + JSON.stringify((event.data as { reason?: unknown }).reason ?? {}).slice(0, 400))
       const reason = event.data.reason
-      const text = chat.buffer.join('\n').trim()
+      let text = chat.buffer.join('\n').trim()
       chat.buffer = []
+      // 主动发言：拦截 __SKIP__，并记录发言/跳过
+      if (this.pendingProactive.delete(key)) {
+        const state = this.proactiveStates.get(key) ?? newChatState()
+        const now = Date.now()
+        if (text === '' || /__SKIP__/i.test(text)) {
+          state.skipStreak += 1
+          state.lastConsiderAt = now
+          this.proactiveStates.set(key, state)
+          this.opts.log('info', '主动发言跳过（模型认为没必要）: ' + key + ' skipStreak=' + state.skipStreak)
+          if (text === '' && reason.kind === 'error') {
+            this.opts.log('debug', '主动发言轮次出错（忽略）: ' + reason.error.message)
+          }
+          return
+        }
+        state.skipStreak = 0
+        state.lastSpokeAt = now
+        state.sentAt = pruneSentAt([...state.sentAt, now], now)
+        state.lastConsiderAt = now
+        this.proactiveStates.set(key, state)
+        this.opts.log('info', '主动发言已发出: ' + key + '（本小时第 ' + state.sentAt.length + ' 条）')
+      }
       if (text !== '') {
         void this.sendText(chat, text)
       } else if (reason.kind === 'error') {

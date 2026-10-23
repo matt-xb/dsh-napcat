@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 
 import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
 import { MemoryStore } from '../lib/memory.js'
+import { decide, inQuietHours, newChatState, parseQuietHours, poissonHit, skipBackoffFactor } from '../lib/proactive.js'
 import { findKeyword, mentions, parseCq, parsePersonaOverrides, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
@@ -167,4 +168,33 @@ test('记忆注入：@ 优先 + 预算截断', () => {
   })
   assert.ok(long.length <= 260)
   assert.match(long, /记忆超预算/)
+})
+test('主动发言：静默时段 / 泊松 / 退避 / 门槛', () => {
+  const quiet = parseQuietHours('23:00-07:00,12:00-13:00')
+  assert.equal(inQuietHours(3 * 60, quiet), true)     // 03:00 在跨天静默段内
+  assert.equal(inQuietHours(12 * 60 + 30, quiet), true)
+  assert.equal(inQuietHours(15 * 60, quiet), false)
+
+  assert.ok(Math.abs(poissonHit(2, 30 * 60_000) - 0.632) < 0.01)
+  assert.ok(poissonHit(0, 1000) === 0)
+  assert.equal(skipBackoffFactor(0), 1)
+  assert.equal(skipBackoffFactor(1), 0.5)
+
+  const base = {
+    enabled: true, ratePerHour: 0, chance: 1, cooldownMinutes: 30,
+    maxPerHour: 3, quietHours: '', minMessages: 3, windowMinutes: 5,
+  }
+  const now = Date.UTC(2026, 9, 23, 4, 0, 0)
+  const ok = decide({ now, minuteOfDay: 600, options: base, state: newChatState(), recentOthers: 5, random: () => 0 })
+  assert.equal(ok.send, true)
+
+  const quietMiss = decide({ now, minuteOfDay: 180, options: { ...base, quietHours: '00:00-08:00' }, state: newChatState(), recentOthers: 5, random: () => 0 })
+  assert.equal(quietMiss.send, false)
+  assert.equal(quietMiss.reason, 'quiet-hours')
+
+  const few = decide({ now, minuteOfDay: 600, options: base, state: newChatState(), recentOthers: 1, random: () => 0 })
+  assert.equal(few.reason, 'not-enough-chatter')
+
+  const cooling = decide({ now, minuteOfDay: 600, options: base, state: { ...newChatState(), lastSpokeAt: now - 10_000 }, recentOthers: 5, random: () => 0 })
+  assert.equal(cooling.reason, 'cooldown')
 })

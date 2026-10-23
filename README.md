@@ -5,15 +5,15 @@
 
 给 [DeepSeek Harness](https://github.com/runzhliu/deepseek-harness) 加一个 **QQ 通道**：通过 [NapCat](https://github.com/NapNeko/NapCatQQ)（OneBot 11 协议）把群聊/私聊消息送进 dsh 的 agent，再把回复发回 QQ。
 
-```
+``
 QQ 用户 ──消息──> NapCat ──事件(WS)──> dsh-napcat ──> 每个会话一个 dsh agent
                                           │
 QQ 用户 <──回复──── NapCat <──动作(WS)────┘   （turn/end 时把助手文本分段发回）
-```
+``
 
 自己维护的一份实现：功能按需长，结构保持薄（连接层 / 会话桥 / 工具 / 配置四块，互不缠绕）。
 
-**当前版本 v0.3.8**（形态参考 `dsh-onebot` / `dsh-im` / `dsh-qqbot`）。
+**当前版本 v0.3.20**（形态参考 `dsh-onebot` / `dsh-im` / `dsh-qqbot`）。
 
 ## 功能
 
@@ -25,7 +25,9 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 | 会话 | **一个群/一个私聊 = 一个 dsh 会话**（`napcat-group-<群号>` / `napcat-private-<QQ>`）；会话 id 里编入 cwd 哈希，重启不换会话 |
 | 分组 | 每个聊天自动建一个 **工作区**（侧边栏 `群 1103089802` / `私聊 1000001`）并挂载会话 |
 | 标题 | 首条消息时把会话标题写成 `MM-DD HH:mm` |
-| 性格 | 群 / 人性格：`personaOverrides`（`group:<群号>=人设` / `private:<QQ>=人设`），按会话注入 systemPrompt |
+| 记忆 | **群记忆**：每群一个 mnemon 记忆空间（设定/黑话/人物/事实四层）+ 最近消息缓冲（默认 200 条）+ 历史预热；模型自动捕获与更新，无需用户命令 |
+| 主动发言 | **伪人模式**（默认关闭）：群里有话题时按泊松概率自己插一句，接上一句不跑题，没话说自动闭嘴（`__SKIP__`） |
+| 性格 | 群 / 人性格：`personaOverrides`（`group:<群号>=人设` / `private:<QQ>=人设`），按会话注入 systemPrompt；只影响语气，不复述设定 |
 | 图片（收） | **原生送达**：下载到 `<会话cwd>/napcat-inbox/` → `attachments.admitPromptContent` → `ImageBlock` 进模型请求（视觉模型直接看图）；同时保留 `[图片: <路径>]` 文本兜底 |
 | 文件（收） | 私聊三级兜底：`get_private_file_url` → `get_file` 的 base64 → `get_file` 的 http url；远端 NapCat 只给本机路径时给出明确原因 |
 | 群文件（收） | 工具按需拉取：`napcat_list_group_files` / `napcat_fetch_group_file`，支持**模糊文件名**（用户只记得一部分也能匹配） |
@@ -50,12 +52,12 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 ### 分层标签（模型自动维护，不需要用户命令）
 
-```
+``
 【设定】群规矩 / 称呼 / 习惯   → tags 加 setting
 【黑话】群内术语 / 缩写 / 梗   → tags 加 glossary
 【人物】成员身份 / 关系 / 别名 → tags 加 person
 【事实】结论 / 约定 / 待办     → 无额外标签
-```
+``
 
 - **自动捕获**：只要对话里出现上述新信息，模型自己写入（`memoryAutoCapture`，默认开）
 - **更新语义**：信息变化时先 `mnemon_forget` 旧条目再写新版本（带「更新于 MM-DD」），不是只增不改
@@ -81,14 +83,67 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 > ⚠️ 实现要点：mnemon 的记忆操作**必须在模型本轮 turn 内**执行（插件用 `ctx.tools.execute()` 在轮次外调用会被拒绝）。所以插件只负责注入上下文 + 转投命令，**从不自己调用 mnemon 的 recall**。
 
+## 主动发言（伪人模式）
+
+默认**关闭**。开启后，群里有人聊天（没叫它）时，它会按概率决定要不要自然插一句。
+
+### 判定链（全部通过才考虑插话）
+
+| 关卡 | 说明 | 配置 |
+|---|---|---|
+| 开启 | 总开关 | `proactiveEnabled` |
+| 静默时段 | 如凌晨不说话 | `proactiveQuietHours`（`00:00-08:00,12:00-13:00`）|
+| 冷却 | 距上次发言至少 N 分钟 | `proactiveCooldownMinutes`（默认 30）|
+| 每小时上限 | 防刷屏 | `proactiveMaxPerHour`（默认 3）|
+| 有人聊 | 近窗口内至少 K 条他人消息 | `proactiveMinMessages` / `proactiveWindowMinutes`（默认 3 条 / 5 分钟）|
+| 概率 | 泊松过程，间隔自然不均 | `proactiveRatePerHour`（λ，默认 1.5 次/小时；设 0 用 `proactiveChance` 固定概率）|
+
+### 接上一句（不跑题）
+
+主动发言的提示里会单独拎出**最后 2 条消息（含发言人）**作为锚点：
+
+``
+【刚才在说的（你必须接住这个，不要换话题）】
+12:03 张三: 这周上线拖到周五了
+12:04 李四: 又要加班了？
+
+[主动发言] 接着上面「12:04 李四: 又要加班了？」往下说一句
+要求：① ≤2 句口语化 ② 必须贴着刚才的话题 ③ 不重复别人刚说的话
+     ④ 不总结、不列点、不点人名 ⑤ 没话说只回 __SKIP__
+``
+
+这样插话是"顺着上一句接"，不会自己另起话题。
+
+### 让模型自己决定闭嘴
+
+通过判定后，投递一条 `[主动发言]` 请求，由模型判断"这话该不该接"：
+
+- 有话可说 → 正常回复（≤ 2 句、口语化、不总结不列点）→ 发出并记一次发言
+- 没什么可说 → 只回 `__SKIP__` → **插件丢弃这条**，并累计 `skipStreak`（连续跳过会按 1/2、1/4…退避降低下次概率）
+
+> 设计参考：泊松触达（revive-companion）、概率+阈值（koishi-plugin-imx）、冷却与群隔离（chat-learning）、QQ 官方主动消息频控（每群 20 qpm / 1000 条/天，我们保守到每小时 3 条）。
+
+### 推荐起步值
+
+``yaml
+proactiveEnabled: true
+proactiveRatePerHour: 1.5      # 平均每小时 1~2 次
+proactiveCooldownMinutes: 30
+proactiveMaxPerHour: 3
+proactiveQuietHours: "00:00-08:00"
+proactiveMinMessages: 3
+proactiveWindowMinutes: 5
+``
+
+
 ## 群 / 人性格
 
 配置 `personaOverrides`，每行一条：
 
-```
+``
 group:<群号>=<人设>
 private:<QQ>=<人设>
-```
+``
 
 - 按会话精确匹配注入（`systemPrompt.context`），不同群可以有不同性格
 - **只影响语气 / 称呼 / 风格**：不会把设定原文念给用户，也不会拿它当自我介绍（代码里有硬约束）
@@ -107,13 +162,13 @@ private:<QQ>=<人设>
 
 ### 2. 安装插件
 
-```bash
+``bash
 # 从 GitHub
 dsh plugin --profile web add github:wzwei1990/dsh-napcat
 
 # 或本地目录
 dsh plugin --profile web add /path/to/dsh-napcat
-```
+``
 
 仓库已提交构建产物 `lib/`，纯安装不需要本地编译；改代码后 `pnpm build` 再重装/重启即可。
 
@@ -153,6 +208,14 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `injectMaxChars` | `4000` | 记忆注入总字符上限（超出截断并提示压缩） |
 | `warmupHistory` | `0` | 预热目标条数（0=关闭）；缓冲不足时用历史接口补齐 |
 | `warmupStaleMinutes` | `10` | 缓冲最新一条超过多少分钟视为过期、需要重新预热 |
+| `proactiveEnabled` | `false` | 主动发言（伪人模式）总开关 |
+| `proactiveRatePerHour` | `1.5` | 泊松 λ：每小时期望主动发言次数（0=改用固定概率） |
+| `proactiveChance` | `0.02` | 固定概率模式的插话概率（λ>0 时不生效） |
+| `proactiveCooldownMinutes` | `30` | 两次主动发言最小间隔 |
+| `proactiveMaxPerHour` | `3` | 每小时最多主动发言次数 |
+| `proactiveQuietHours` | `00:00-08:00` | 静默时段（逗号分隔多段） |
+| `proactiveMinMessages` | `3` | 窗口内至少多少条他人消息才考虑 |
+| `proactiveWindowMinutes` | `5` | 观察窗口（分钟） |
 | `agentPreset` | `''` | 会话使用的 preset（留空=宿主默认） |
 | `provider` / `model` | `''` | 覆盖模型（留空=宿主默认模型） |
 | `logLevel` | `info` | `debug` 看投递/图片细节 |
@@ -167,16 +230,19 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `napcat_send_file` | 发文件（`file` 段 → 退回 `upload_*_file`） |
 | `napcat_list_group_files` | 列群文件（`get_group_root_files` / `get_group_files_by_folder`，可按关键字过滤） |
 | `napcat_fetch_group_file` | 下载群文件（**模糊文件名**；多个同分返回候选清单） |
+| `napcat_memory_space` | 把本群 mnemon 记忆空间 id 登记给插件（插件缓存后自动带入上下文） |
 | `napcat_api` | 白名单内的原始 OneBot 动作 |
 
 省略 `chat_id` 时，工具默认作用于当前会话。
 
-## 工作原理（读代码前先看这四句）
+## 工作原理（读代码前先看这六条）
 
 1. **一条 QQ 消息 → 一个 dsh 会话**：`chatRefOf()` 得 `group:<号>` / `private:<QQ>`，`ensureChat()` 建/恢复会话（cwd 哈希进 id）。
 2. **媒体先落盘再进模型**：下载 → `attachments.admitPromptContent` → `ImageBlock`；`createUserMessage({ content: [...blocks, text] })` → `agent.followup()`。
 3. **回复靠会话事件**：监听 `session/event`，`assistant/message` + `turn/end` 拼文本 → `send_msg`（按 `splitMaxChars` 分段）。
 4. **分组靠工作区注册表**：`workspaceRegistry.resolveByPath/create` + `attachSession`（宿主要求工作区路径 == 会话 cwd）。
+5. **记忆 = 两层**：`recent.jsonl`（热上下文，插件自己写）+ mnemon 空间（长期，**只能由模型在轮内读写**——插件在轮次外调会被 View 拒绝）。
+6. **主动发言 = 判定 + 自决**：`src/proactive.ts` 做纯判定（静默/冷却/限流/条数/泊松），通过后投递 `[主动发言]`，模型回 `__SKIP__` 则丢弃并累计退避。
 
 ## 排错
 
@@ -188,17 +254,21 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | 收图/收文件失败 | 远端 NapCat 常只给**本机路径**（`/app/...`）→ 需开文件直链或共享目录 |
 | 群文件列表失败 | 老 NapCat 用 `get_group_file_list`，新版用 `get_group_root_files`；插件两个都试，失败会列具体原因 |
 | 会话重复/串台 | `workspacePath` 是否变过（变了会换会话）；归档过的会话会自动换 `-rN` |
+| 记忆不生效 | 看 `memory/<群>/space.json` 是否已登记空间 id；`memory/_debug.log` 里出现 `Recall requires the View` 属已知噪音（模型轮内调用正常） |
+| 记忆回复太啰嗦 | 已内置静默规则（不复述设定、不解释机制）；若仍啰嗦说明跑的是旧版本 |
+| 主动发言一直不触发 | 依次查：`proactiveEnabled` 是否开 / 静默时段 / 冷却 30 分钟 / 每小时 3 条上限 / 近 5 分钟是否够 3 条他人消息；`logLevel: debug` 会打印 `主动发言不触发(<原因>)` |
+| 主动发言跑题 | 提示里已锚定最后 2 条消息；若仍跑题可下调 `proactiveRatePerHour`（少而精） |
 
 ## 开发
 
-```bash
+``bash
 pnpm install
 pnpm typecheck   # tsc --noEmit
 pnpm build       # tsc → lib/
 pnpm test        # node --test
-```
+``
 
-```
+``
 src/
   index.ts      插件入口（inject / apply / 设置热更新 / 人设注入）
   bridge.ts     QQ ↔ DSH 桥（会话装配、收媒体、投递、回复泵、工作区）
@@ -209,7 +279,7 @@ src/
   config.ts     schemastery 配置（每字段 volatile）
 client/
   index.js      设置页（settings.section）
-```
+``
 
 ## Roadmap
 
@@ -220,7 +290,7 @@ client/
 - [x] 私聊文件 / 引用消息媒体 / 群文件（模糊匹配）
 - [x] 会话标题、归档会话自动换新、诊断日志
 - [x] **群记忆（mnemon 分层）**：热上下文缓冲 + 设定/黑话/人物/事实四层 + 自动捕获 + 更新语义 + 历史预热
-- [ ] **主动发言**（定时或事件驱动，带频率与冷场控制）
+- [x] **主动发言（伪人模式）**：泊松概率 + 静默/冷却/限流 + `__SKIP__` 自决 + 退避 + 话题锚定
 - [ ] 语音消息（STT / TTS）
 - [x] 发文件：`file` 段 base64 已验证可用（远端 NapCat 生效）；`upload_*_file` 仅作兜底（官方要求本地路径或 URL，base64 未文档化）
 
