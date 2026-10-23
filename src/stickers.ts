@@ -91,8 +91,11 @@ export async function findStickers(chatKey: string, query: string, root = '', re
       }
     } catch { /* Missing or redirected catalogs fail closed. */ }
   }
-  // Diversity must not outrank a substantially better semantic match.
-  return matches.sort((a, b) => (b.score - Number(b.recentlyUsed)) - (a.score - Number(a.recentlyUsed))
-    || Number(a.recentlyUsed) - Number(b.recentlyUsed) || b.score - a.score
-    || (used.get(imageKey(a.path)) ?? -1) - (used.get(imageKey(b.path)) ?? -1) || a.id.localeCompare(b.id)).slice(0, 5)
+  // Rotate within two-point score bands, including after every comparable image was used.
+  const best = Math.max(0, ...matches.map(match => match.score))
+  const tier = (match: StickerMatch): number => Math.floor((best - match.score) / 2)
+  return matches.sort((a, b) => tier(a) - tier(b)
+    || Number(a.recentlyUsed) - Number(b.recentlyUsed)
+    || (used.get(imageKey(a.path)) ?? -1) - (used.get(imageKey(b.path)) ?? -1)
+    || b.score - a.score || a.id.localeCompare(b.id)).slice(0, 5)
 }

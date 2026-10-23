@@ -28,6 +28,8 @@ test('recent image memory preserves concurrent deliveries and isolates chat/role
       mem.appendRecent('private:43', { nick: '助手', role: 'assistant', text: '[图片]', image: 'other.png' }),
     ])
     assert.deepEqual(await mem.readRecentImages('group:42'), ['one.png', 'two.png'])
+    await mem.appendRecent('group:42', { nick: '助手', role: 'assistant', text: '[图片]', image: 'one.png' })
+    assert.deepEqual(await mem.readRecentImages('group:42'), ['one.png', 'two.png', 'one.png'])
     assert.deepEqual(await mem.readRecentImages('private:43'), ['other.png'])
     assert.deepEqual(await mem.readRecentImages('group:42', 0), [])
     assert.deepEqual(await mem.readRecentImages('group:44'), [])

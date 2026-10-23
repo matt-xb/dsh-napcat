@@ -39,6 +39,36 @@ test('stickers: dynamic scope, semantic matching, hash and recent-use penalty', 
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
+test('stickers: comparable emotions cycle after all were used, without promoting weak matches', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'napcat-rotation-')))
+  try {
+    const entries = []
+    for (const [id, tags] of [['a', ['开心']], ['b', ['快乐']], ['c', ['高兴']], ['weak', ['开']], ['wrong', ['难过']]]) {
+      const path = join(root, id + '.png')
+      const bytes = Buffer.from(id)
+      await writeFile(path, bytes)
+      entries.push({ id, path, sha256: digest(bytes), tags })
+    }
+    await writeFile(join(root, 'catalog.json'), JSON.stringify(entries))
+    const history = []
+    const choices = []
+    for (let turn = 0; turn < 9; turn++) {
+      const matches = await findStickers('group:42', '开心', root, history)
+      assert.ok(matches.every(item => item.id !== 'wrong'))
+      choices.push(matches[0].id)
+      history.push(matches[0].path)
+    }
+    assert.deepEqual(choices, ['a', 'b', 'c', 'a', 'b', 'c', 'a', 'b', 'c'])
+    assert.equal((await findStickers('private:43', '开心', root))[0].id, 'a')
+    assert.equal((await findStickers('group:42', '开心', root, history))[0].id, 'a')
+    // Queries do not consume a rotation slot; only a successful send changes history.
+    assert.equal((await findStickers('group:42', '开心', root, history))[0].id, 'a')
+    entries[0].title = '开心 快乐 高兴 好耶'
+    await writeFile(join(root, 'catalog.json'), JSON.stringify(entries))
+    assert.equal((await findStickers('group:42', '开心 快乐 高兴', root, [entries[0].path]))[0].id, 'a')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test('stickers: redirected catalog is rejected', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'napcat-link-')))
   try {

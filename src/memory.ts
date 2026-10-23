@@ -301,7 +301,9 @@ export class MemoryStore {
     const dir = await this.ensureDir(chatKey)
     const path = join(dir, RECENT_FILE)
     type Row = RecentRow
-    const sameDelivery = (left: Row, right: Row): boolean => (left.role ?? 'user') === (right.role ?? 'user') && left.image === right.image
+    // Acknowledged image sends are distinct uses, even when the same image is sent within five seconds.
+    const sameDelivery = (left: Row, right: Row): boolean => !(left.role === 'assistant' && left.image)
+      && (left.role ?? 'user') === (right.role ?? 'user') && left.image === right.image
     const normText = (text: string): string => text.replace(/\[图片:[^\]]*\]/g, '[图片]').trim()
     /**
      * 合并同一条消息的两份记录：**逐字段取优**（不是整行二选一）。
