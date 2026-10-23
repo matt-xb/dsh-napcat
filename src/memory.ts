@@ -175,6 +175,23 @@ export class MemoryStore {
     }
   }
 
+  /** 埋点：把 agent 的会话事件尾部写进 _debug.log，用于排查 mnemon 的 turn/View 绑定。 */
+  async dumpTurnState(chatKey: string, agent: unknown): Promise<void> {
+    try {
+      const session = (agent as { session?: { id?: unknown; snapshotEvents?(): Array<{ type?: string; data?: { turn?: number } }> } } | undefined)?.session
+      const events = session?.snapshotEvents?.() ?? []
+      const tail = events.slice(-8).map(event => event.type + (typeof event.data?.turn === 'number' ? '(' + event.data.turn + ')' : ''))
+      let open: number | undefined
+      for (const event of events) {
+        if (event.type === 'turn/start' && typeof event.data?.turn === 'number') open = event.data.turn
+        else if (event.type === 'turn/end' && event.data?.turn === open) open = undefined
+      }
+      this.dumpRaw('turn-state', 'session=' + String(session?.id) + ' openTurn=' + String(open) + ' tail=' + tail.join(' | '))
+    } catch (error) {
+      this.dumpRaw('turn-state 失败', error instanceof Error ? error.message : String(error))
+    }
+  }
+
   /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
   async saveSpace(chatKey: string, spaceId: string): Promise<void> {
     const dir = await this.ensureDir(chatKey)

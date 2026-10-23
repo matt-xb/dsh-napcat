@@ -37,6 +37,8 @@ export declare class MemoryStore {
     private reportFailure;
     /** 拿到（或创建）本聊天的 mnemon 空间 id；失败返回 undefined（自动退化为文件记忆）。 */
     ensureSpace(chatKey: string, agent: unknown): Promise<string | undefined>;
+    /** 埋点：把 agent 的会话事件尾部写进 _debug.log，用于排查 mnemon 的 turn/View 绑定。 */
+    dumpTurnState(chatKey: string, agent: unknown): Promise<void>;
     /** 登记空间 id（供 napcat_memory_space 工具调用）。 */
     saveSpace(chatKey: string, spaceId: string): Promise<void>;
     /** 写一条长期记忆：优先 mnemon，失败落 notes.md。 */
