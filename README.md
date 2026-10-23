@@ -79,7 +79,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 - 群 → `get_group_msg_history`
 - 私聊 → `get_friend_msg_history`
 
-判据是「条数够 **且** 够新」：`warmupHistory`（目标条数）、`warmupStaleMinutes`（新鲜度），不会一直抱着旧聊天。
+判据是「条数够 **且** 够新」：`warmupHistory`（目标条数）、`warmupStaleMinutes`（新鲜度）。预热是**合并**（按时间+昵称+内容去重），绝不会把已攒下的历史覆盖掉 ✗→✓。
 
 > ⚠️ 实现要点：mnemon 的记忆操作**必须在模型本轮 turn 内**执行（插件用 `ctx.tools.execute()` 在轮次外调用会被拒绝）。所以插件只负责注入上下文 + 转投命令，**从不自己调用 mnemon 的 recall**。
 

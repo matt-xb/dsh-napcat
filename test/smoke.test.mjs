@@ -208,3 +208,28 @@ test('图片缓存：日期键与 URL 去重 hash', () => {
   assert.notEqual(a, urlHash('https://example.com/b.jpg'))
   assert.equal(a.length, 10)
 })
+test('预热合并不会丢历史（seedRecent 合并语义）', async () => {
+  const { mkdtempSync, rmSync, readFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'seed-test-'))
+  try {
+    const store = new MemoryStore({
+      ctx: {}, root: dir, spacePrefix: 'napcat-', backend: 'file',
+      recentLimit: 100, injectRecent: 20, injectMaxChars: 4000, log: () => undefined,
+    })
+    for (let i = 0; i < 40; i += 1) {
+      await store.appendRecent('group:1', { nick: '张三', text: 'old-' + i, at: 1_700_000_000_000 + i * 1000 })
+    }
+    assert.equal(await store.recentCount('group:1'), 40)
+    const fetched = []
+    for (let i = 30; i < 60; i += 1) fetched.push({ nick: '张三', text: 'old-' + i, at: 1_700_000_000_000 + i * 1000 })
+    await store.seedRecent('group:1', fetched)
+    const after = await store.recentCount('group:1')
+    assert.ok(after >= 40, '旧记录不能被顶掉，实际 ' + after)
+    const lines = readFileSync(join(dir, 'group-1', 'recent.jsonl'), 'utf8').trim().split('\n')
+    assert.equal(JSON.parse(lines[0]).text, 'old-0')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

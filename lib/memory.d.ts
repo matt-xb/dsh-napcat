@@ -53,7 +53,10 @@ export declare class MemoryStore {
         text: string;
         at?: number;
     }): Promise<void>;
-    /** 预热：用历史消息覆盖 recent（调用方判断缓冲是否不足）。 */
+    /**
+     * 预热：把历史消息**合并**进 recent（按 时间+昵称+内容 去重，保留已有旧记录）。
+     * 注意：绝不能覆盖——否则每次"缓冲过期"都会把之前攒的几十上百条历史顶掉。
+     */
     seedRecent(chatKey: string, entries: Array<{
         nick: string;
         text: string;
