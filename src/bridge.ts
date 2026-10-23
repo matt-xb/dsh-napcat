@@ -300,16 +300,32 @@ export class Bridge {
       const recent = await this.mem.readRecent(ref.key, this.opts.config.injectRecent)
       // 主动发言也要带完整记忆块（空间 id / 固定层召回指令 / 自动记忆规则），与 @ 触发时一致
       let memoryBlock = ''
+      let proactiveSpaceId: string | undefined
       if (this.opts.config.memoryEnabled) {
         try {
-          const spaceId = await this.mem.ensureSpace(ref.key, chat.agent)
+          proactiveSpaceId = await this.mem.ensureSpace(ref.key, chat.agent)
           const recalled = this.opts.config.memoryBackend === 'file'
             ? await this.mem.recall(ref.key, recent.slice(-5).join(' '), chat.agent)
             : ''
-          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId })
+          memoryBlock = this.mem.buildInjection({ chatKey: ref.key, recent, recallText: recalled, spaceId: proactiveSpaceId })
         } catch (error) {
           this.opts.log('debug', '主动发言记忆注入失败: ' + (error instanceof Error ? error.message : String(error)))
         }
+      }
+      // 主动发言轮的记忆任务：没有空间就建好并先记一条；有空间就顺手记新信息（各限 1 条，别啰嗦）
+      if (this.opts.config.memoryEnabled && this.opts.config.memoryBackend === 'mnemon') {
+        const spaceName = this.opts.config.memorySpacePrefix + ref.key
+        const registerCall = ref.kind === 'group'
+          ? 'napcat_memory_space({ group_id: "' + ref.id + '", space_id: <同一个 id> })'
+          : 'napcat_memory_space({ user_id: "' + ref.id + '", space_id: <同一个 id> })'
+        memoryBlock += proactiveSpaceId === undefined
+          ? '\n\n【本轮额外要求·先做这个再说话】本群还没有记忆空间。请依次执行：'
+            + '① mnemon_memory_body_create({ name: "' + spaceName + '", description: "QQ ' + ref.key + ' 的长期记忆" })'
+            + '② mnemon_memory_body_update({ memoryBodyId: <返回的 id>, active: true })'
+            + '③ ' + registerCall
+            + '④ 从上面的近期群聊里提炼 1~3 条值得长期记住的内容（群定位/成员称呼/黑话梗/重要约定），用 mnemon_remember 写进这个空间。'
+            + '全部做完后再照常插话（没有想说的仍然回 __SKIP__）。这一步只做一次，之后本群就有记忆空间了。'
+          : '\n\n【本轮小提醒】如果上面的近期群聊里出现了值得长期记住的新信息（新人设/称呼/黑话/重要约定），可以顺手调用 mnemon_remember 记 1 条（最多 1 条，没实质内容就不记）；这只是附带动作，不要因此改变插话的语气。'
       }
       this.pendingProactive.add(ref.key)
       // 接上一句：把最后 2 条（含发言人）单独拎出来，要求话题贴近、不要突然换台

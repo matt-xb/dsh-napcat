@@ -385,20 +385,26 @@ export function registerTools(
     name: 'napcat_memory_space',
     description: '把本群/私聊的 mnemon 记忆空间 id 登记给插件（插件记到本地缓存，之后自动带进上下文）。',
     parameters: {
-      group_id: { type: 'string', description: '群号；私聊可省略' },
+      group_id: { type: 'string', description: '群号；私聊可省略（改用 user_id）' },
+      user_id: { type: 'string', description: '私聊对方 QQ 号；群聊可省略' },
       space_id: { type: 'string', description: 'mnemon 记忆空间 id' },
     },
     output: textOutput(),
     isConcurrencySafe: () => false,
     execute: async (args, exec) => {
-      const input = args as { group_id?: string; space_id?: string }
+      const input = args as { group_id?: string; user_id?: string; space_id?: string }
       const spaceId = (input.space_id ?? '').trim()
       if (spaceId === '') throw new Error('需要 space_id')
       const sessionId = (exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id
       const derived = sessionId === undefined || keyForSession === undefined ? undefined : keyForSession(String(sessionId))
       const groupId = (input.group_id ?? (derived?.startsWith('group:') === true ? derived.slice(6) : '')).trim()
-      if (groupId === '') throw new Error('需要 group_id（当前会话不是群会话）')
-      await deps.rememberSpace?.('group:' + groupId, spaceId)
-      return '已登记：group:' + groupId + ' → ' + spaceId + '（之后自动注入给模型）'
+      if (groupId !== '') {
+        await deps.rememberSpace?.('group:' + groupId, spaceId)
+        return '已登记：group:' + groupId + ' → ' + spaceId + '（之后自动注入给模型）'
+      }
+      const userId = (input.user_id ?? (derived?.startsWith('private:') === true ? derived.slice(8) : '')).trim()
+      if (userId === '') throw new Error('需要 group_id 或 user_id（当前会话身份未知）')
+      await deps.rememberSpace?.('private:' + userId, spaceId)
+      return '已登记：private:' + userId + ' → ' + spaceId + '（之后自动注入给模型）'
     },
   }))}
