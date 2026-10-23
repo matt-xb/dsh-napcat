@@ -420,6 +420,12 @@ export class MemoryStore {
     }
     if (parts.recent.length > 0) {
       blocks.push('【最近群聊（背景，用于理解话题，不要逐条回应）】\n' + parts.recent.join('\n'))
+      // 只有 @ 那一轮图片是真正随消息送进来的；其余轮次图片只有记录，想看必须自己读文件
+      if (parts.recent.some(line => line.includes('[图片'))) {
+        blocks.push('【记录里的图片怎么看】形如 [图片:napcat-inbox/imgs/<日期>/<文件>] 的是本机已缓存的图（相对当前工作目录），'
+          + '要用 read_image 传这个相对路径才能真正看到画面；只写 [图片] 或 [图片(已过期)] 的表示当时没缓存下来，看不到内容。'
+          + '正常情况下不必每张都看，只有话题确实需要（在聊图/表情包/截图里的内容）时才读，避免拖慢回复。')
+      }
     }
     if (this.opts.backend === 'mnemon') {
       if (parts.spaceId !== undefined && parts.spaceId !== '') {

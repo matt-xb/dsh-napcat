@@ -9,7 +9,7 @@
  */
 
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -336,19 +336,22 @@ export class Bridge {
           : '\n\n【本轮小提醒】如果上面的近期群聊里出现了值得长期记住的新信息（新人设/称呼/黑话/重要约定），可以顺手调用 mnemon_remember 记 1 条（最多 1 条，没实质内容就不记）；这只是附带动作，不要因此改变插话的语气。'
       }
       this.pendingProactive.add(ref.key)
-      // 接上一句：把最后 2 条（含发言人）单独拎出来，要求话题贴近、不要突然换台
-      const lastTwo = recent.slice(-2)
-      const lastSpeaker = lastTwo.length === 0 ? '' : lastTwo[lastTwo.length - 1] ?? ''
-      const anchorBlock = lastTwo.length === 0
+      // 优先参考最近几条，但不是"只准接最后一句"：允许结合更早的上下文与长期记忆来回
+      const lastThree = recent.slice(-3)
+      const latestSpeaker = lastThree.length === 0 ? '' : lastThree[lastThree.length - 1] ?? ''
+      const anchorBlock = lastThree.length === 0
         ? ''
-        : '【刚才在说的（你必须接住这个，不要换话题）】\n' + lastTwo.join('\n') + '\n\n'
+        : '【最近的对话（优先从这里切入）】\n' + lastThree.join('\n') + '\n\n'
       await this.dispatch(chat,
         (memoryBlock === '' ? '' : memoryBlock + '\n\n')
         + anchorBlock
-        + '[主动发言] 现在是主动插话窗口：接着上面「' + (lastSpeaker === '' ? '最近消息' : lastSpeaker.slice(0, 60)) + '」往下说一句。\n'
-        + '要求：① 不超过 2 句、口语化，不要像播报；② 必须贴着刚才的话题（附和/补充/吐槽/接梗都行），不要另起话题；\n'
-        + '③ 不要重复别人刚说过的话；④ 不要总结、不要列点、不要叫人名字点人；\n'
-        + '⑤ 如果你没什么想说的、或接话会显得多余，就只回复 __SKIP__（三个下划线 + SKIP），我会丢弃这条。',
+        + '[主动发言] 现在是主动插话窗口。\n'
+        + '怎么想：先看上面的群设定、长期记忆和完整聊天记录，判断大家在聊什么、聊到哪一步，再决定你要说什么；'
+        + '切入点**优先取最近这几条**（' + (latestSpeaker === '' ? '最新消息' : '最近一句来自「' + latestSpeaker.slice(0, 40) + '」') + '），'
+        + '但不必死盯最后一句——如果前面几轮里有个更值得回应/补充/吐槽的点，也可以接着那个说。\n'
+        + '怎么说：① 不超过 2 句、口语化，像群成员随口插话，不要像播报或客服；② 附和、补充、吐槽、接梗、追问都行；\n'
+        + '③ 不要重复别人刚说过的内容，不要总结、不要列点、不要点名；④ 不要抛与本群历史和当前话题无关的新话题；\n'
+        + '⑤ 拿不准或觉得这轮插话多余，就只回复 __SKIP__（三个下划线 + SKIP），我会丢弃这条。',
         [], [])
       this.opts.log('info', '主动发言已触发: ' + ref.key + '（' + decision.reason + '）')
     } catch (error) {
@@ -397,10 +400,12 @@ export class Bridge {
       const list = Array.isArray(data?.messages) ? data.messages : []
       // 历史图片：消息里存的 url 会过期，但 file id 还能用 get_image 重新解析 → 能解析就缓存
       let cache: ImageCache | undefined
+      let cacheCwd = ''
       let imageBudget = this.opts.config.warmupImages ? this.opts.config.warmupImageLimit : 0
       if (imageBudget > 0) {
         try {
-          cache = this.imageCacheFor(await this.cwdFor(ref))
+          cacheCwd = await this.cwdFor(ref)
+          cache = this.imageCacheFor(cacheCwd)
         } catch {
           cache = undefined
         }
@@ -446,7 +451,7 @@ export class Bridge {
               continue
             }
             const hit = await cache?.save({ url, chatKey: ref.key, nick: task.speaker, name: nameFromRef(fileRef, 'image.png') })
-            if (hit !== undefined) names.push(hit.name)
+            if (hit !== undefined) names.push(relative(cacheCwd, hit.path).replace(/\\/g, '/'))
             else expired += 1
           } catch {
             expired += 1
