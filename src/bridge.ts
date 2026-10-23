@@ -208,7 +208,8 @@ export class Bridge {
         const url = info?.url
         if (typeof url !== 'string' || url === '') continue
         const hit = await cache.save({ url, chatKey: ref.key, nick, name: nameFromRef(fileRef, 'image.png') })
-        if (hit !== undefined) saved.push(hit.name)
+        // 写成相对工作目录的路径，模型才能用 read_image 直接打开（只写文件名是打不开的）
+        if (hit !== undefined) saved.push(relative(cwd, hit.path).replace(/\\/g, '/'))
       } catch (error) {
         this.opts.log('debug', '图片缓存失败（已跳过）: ' + (error instanceof Error ? error.message : String(error)))
       }
