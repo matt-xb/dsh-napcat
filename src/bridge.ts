@@ -636,6 +636,12 @@ export class Bridge {
 
     this.chats.set(ref.key, state)
     this.bySession.set(String(handle.agent.session.id), ref.key)
+    // 新会话也要立刻套用群/人设（否则只有"保存设置"时才会补上）
+    {
+      const persona = this.personas.get(ref.key)
+      if (persona !== undefined && persona !== '') this.personaBySession.set(String(handle.agent.session.id), persona)
+      else this.personaBySession.delete(String(handle.agent.session.id))
+    }
     // 侧边栏工作区需要显式挂载会话（否则显示未分组）
     await this.attachToWorkspace(cwd, workspaceTitle(ref), handle.agent.session.id)
     this.opts.log('info', '会话就绪: ' + ref.key + ' → ' + String(handle.agent.session.id) + ' (cwd=' + cwd + ')')
