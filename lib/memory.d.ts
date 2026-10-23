@@ -54,7 +54,7 @@ export declare class MemoryStore {
         at?: number;
     }): Promise<void>;
     /**
-     * 预热：把历史消息**合并**进 recent（按 时间+昵称+内容 去重，保留已有旧记录）。
+     * 预热：把历史消息**合并**进 recent（按 时间+内容 去重；旧记录里昵称为空而新数据有昵称时自动补全）。
      * 注意：绝不能覆盖——否则每次"缓冲过期"都会把之前攒的几十上百条历史顶掉。
      */
     seedRecent(chatKey: string, entries: Array<{

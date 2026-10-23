@@ -269,7 +269,7 @@ export class MemoryStore {
   }
 
   /**
-   * 预热：把历史消息**合并**进 recent（按 时间+昵称+内容 去重，保留已有旧记录）。
+   * 预热：把历史消息**合并**进 recent（按 时间+内容 去重；旧记录里昵称为空而新数据有昵称时自动补全）。
    * 注意：绝不能覆盖——否则每次"缓冲过期"都会把之前攒的几十上百条历史顶掉。
    */
   async seedRecent(chatKey: string, entries: Array<{ nick: string; text: string; at?: number }>): Promise<number> {
@@ -277,7 +277,16 @@ export class MemoryStore {
     const dir = await this.ensureDir(chatKey)
     const path = join(dir, RECENT_FILE)
     type Row = { t: number; nick: string; text: string }
-    const keyOf = (row: Row): string => row.t + '|' + row.nick + '|' + row.text
+    // 归一化：把 [图片:<文件名>] 视作 [图片]，否则同一张图会被"实时带文件名 / 历史只有占位符"记成两条
+    const normText = (text: string): string => text.replace(/\[图片:[^\]]*\]/g, '[图片]').trim()
+    const keyOf = (row: Row): string => row.t + '|' + normText(row.text)
+    /** 两条记录里挑更完整的：有昵称优先，其次文本更长（带缓存文件名）。 */
+    const better = (left: Row, right: Row): Row => {
+      const leftRich = left.nick !== '' && left.nick !== '?'
+      const rightRich = right.nick !== '' && right.nick !== '?'
+      if (leftRich !== rightRich) return rightRich ? right : left
+      return right.text.length > left.text.length ? right : left
+    }
     const merged = new Map<string, Row>()
     // 先放已有记录
     try {
@@ -286,7 +295,11 @@ export class MemoryStore {
         if (line.trim() === '') continue
         try {
           const row = JSON.parse(line) as Row
-          if (typeof row.t === 'number') merged.set(keyOf(row), row)
+          if (typeof row.t === 'number') {
+            const key = keyOf(row)
+            const previous = merged.get(key)
+            merged.set(key, previous === undefined ? row : better(previous, row))
+          }
         } catch {
           // 坏行跳过
         }
@@ -301,7 +314,9 @@ export class MemoryStore {
         nick: entry.nick.slice(0, 24),
         text: entry.text.slice(0, 500),
       }
-      merged.set(keyOf(row), row)
+      const key = keyOf(row)
+      const previous = merged.get(key)
+      merged.set(key, previous === undefined ? row : better(previous, row))
     }
     const rows = [...merged.values()].sort((left, right) => left.t - right.t).slice(-this.opts.recentLimit)
     await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n') + '\n', 'utf8')
