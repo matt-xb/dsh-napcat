@@ -165,9 +165,10 @@ export class Bridge {
       const fresh = newest > 0 && Date.now() - newest <= staleMs
       if (enough && fresh) return
       this.warmAttempts.set(ref.key, Date.now())
+      this.opts.log('info', '预热触发 ' + ref.key + '：已有 ' + have + ' 条，目标 ' + this.opts.config.warmupHistory)
       await this.warmup(ref)
     } catch (error) {
-      this.opts.log('debug', '预热判断失败: ' + (error instanceof Error ? error.message : String(error)))
+      this.opts.log('warn', '预热判断失败: ' + (error instanceof Error ? error.message : String(error)))
     }
   }
 
@@ -190,7 +191,7 @@ export class Bridge {
       const seeded = await this.mem.seedRecent(ref.key, entries)
       this.opts.log('info', '预热历史 ' + ref.key + '：' + seeded + ' 条')
     } catch (error) {
-      this.opts.log('debug', '预热历史失败: ' + (error instanceof Error ? error.message : String(error)))
+      this.opts.log('warn', '预热历史失败: ' + (error instanceof Error ? error.message : String(error)))
     }
   }
 
@@ -215,6 +216,15 @@ export class Bridge {
     const rawText = toText(msg.message, selfId)
     const keyword = findKeyword(rawText, this.opts.config.triggerKeywords)
 
+    // ── 观察层：在 @门控之前，所有消息（不管有没有叫到机器人）都记进缓冲 ──
+    const senderNick = String((msg.sender as { nickname?: unknown } | undefined)?.nickname ?? userId)
+    if (this.opts.config.memoryEnabled) {
+      void this.mem.appendRecent(ref.key, { nick: senderNick, text: rawText })
+      if (this.opts.config.warmupHistory > 0) {
+        void this.maybeWarmup(ref)
+      }
+    }
+
     if (ref.kind === 'group' && this.opts.config.requireMention) {
       if (selfId === '') {
         if (!this.mentionWarned) {
@@ -225,16 +235,10 @@ export class Bridge {
         const recent = this.chats.get(ref.key)?.recentReplyIds ?? []
         const hit = mentions(msg.message, selfId) || repliesToAny(msg.message, recent) || keyword !== undefined
         if (!hit) {
-          this.opts.log('debug', '群消息未 @ 机器人且没命中关键字，跳过: ' + ref.key)
+          this.opts.log('debug', '群消息未 @ 机器人且没命中关键字（已记入缓冲）: ' + ref.key)
           return
         }
       }
-    }
-
-    // 观察：无论是否触发机器人都记进本群最近对话，供"知道刚才在聊什么"
-    const senderNick = String((msg.sender as { nickname?: unknown } | undefined)?.nickname ?? userId)
-    if (this.opts.config.memoryEnabled && ref.kind === 'group') {
-      void this.mem.appendRecent(ref.key, { nick: senderNick, text: rawText })
     }
 
     const chat = await this.ensureChat(ref)
