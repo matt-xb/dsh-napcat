@@ -46,6 +46,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'ignoreSelf', label: '忽略机器人自己的消息', kind: 'boolean' },
         { key: 'replyAsQuote', label: '回复时引用原消息', kind: 'boolean' },
         { key: 'splitMaxChars', label: '单条消息最大字数（0=不分段）', kind: 'number' },
+        { key: 'sendIntervalMs', label: '分段消息间隔（毫秒，防 QQ 风控）', kind: 'number' },
         { key: 'reconnectMaxAttempts', label: '重连上限（0=无限）', kind: 'number' },
         { key: 'workspacePath', label: '会话工作区路径（留空=宿主 cwd）', kind: 'text' },
   { key: 'perChatWorkspace', label: '每个会话用独立子目录（workspacePath/napcat/<群号或QQ>）', kind: 'boolean' },

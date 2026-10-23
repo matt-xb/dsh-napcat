@@ -36,6 +36,7 @@ export interface Config {
   replyAsQuote: boolean
   /** 单条 QQ 消息的最大字数，超出按段落/句子分段发送；0=不分段。 */
   splitMaxChars: number
+  sendIntervalMs: number
   /** forward 模式连续失败多少次后放弃重连（0=无限）。 */
   reconnectMaxAttempts: number
   /** QQ 会话挂载的工作区；留空=宿主进程 cwd。 */
@@ -111,6 +112,8 @@ export const Config: Z<Config> = z.object({
     .description('回复时引用原消息（QQ 里显示为"回复"）').volatile(),
   splitMaxChars: z.number().default(1200)
     .description('单条 QQ 消息最大字数，超出自动分段；0=不分段').volatile(),
+  sendIntervalMs: z.number().default(500)
+    .description('分段消息之间的间隔（毫秒），避免 QQ 风控连发；0=不限').volatile(),
   reconnectMaxAttempts: z.number().default(0)
     .description('forward 模式连续失败多少次后放弃重连（0=无限重试，退避封顶 60s；日志会限流）').volatile(),
   personaOverrides: z.string().default('')
@@ -171,6 +174,7 @@ export const DEFAULTS: Config = {
   ignoreSelf: true,
   replyAsQuote: false,
   splitMaxChars: 1200,
+  sendIntervalMs: 500,
   reconnectMaxAttempts: 0,
   workspacePath: '',
   perChatWorkspace: true,

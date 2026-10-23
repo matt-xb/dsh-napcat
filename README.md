@@ -147,6 +147,18 @@ imageCacheRetentionDays: 7      # 超期目录自动清理
 
 > 设计参考：泊松触达（revive-companion）、概率+阈值（koishi-plugin-imx）、冷却与群隔离（chat-learning）、QQ 官方主动消息频控（每群 20 qpm / 1000 条/天，我们保守到每小时 3 条）。
 
+### 被禁言了会自动停发
+
+发送失败时会探测一次禁言状态（`get_group_member_info` 的 `shut_up_timestamp`，外加 `get_group_info` 的 `group_all_shut` 全员禁言）：
+
+| 情况 | 插件行为 |
+|---|---|
+| 机器人被禁言 | 记下**解禁时间**，期间**不再发消息**、也**跳过主动发言**（日志：`本群禁言中，暂停发送 …（解禁 20:15:00）`） |
+| 全员禁言 | 暂停 15 分钟后重新探测 |
+| 未禁言（只是风控/发太快） | 重试 3 次（间隔递增），仍失败则本次放弃 + 提示 |
+
+> 机器人自己的 QQ 取 `botQQ` 配置；没填时自动调 `get_login_info` 取一次并缓存，所以**不填也能生效**。
+
 ### 为什么半天没看到它说话？
 
 主动发言是**低频**设计，用真实群聊（134 条消息 / 171 分钟）回放验证过：
@@ -257,6 +269,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `requireMention` | `true` | 群聊是否必须 @；关键字/回复命中则不需要 |
 | `ignoreSelf` | `true` | 忽略机器人自己发的消息 |
 | `replyAsQuote` | `false` | 回复时是否引用原消息 |
+| `sendIntervalMs` | `500` | 分段消息之间的间隔（毫秒），避免 QQ 风控连发；0=不限 |
 | `splitMaxChars` | `1200` | 长消息分段长度 |
 | `reconnectMaxAttempts` | `10` | 重连次数（2s→60s 退避） |
 | `perChatWorkspace` | `true` | 每个聊天一个独立工作区/分组 |

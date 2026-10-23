@@ -58,6 +58,10 @@ export declare class Bridge {
     private readonly chatterReady;
     /** 已投递主动发言请求、等待回复拦截的聊天。 */
     private readonly pendingProactive;
+    /** 群禁言到什么时候（毫秒）：期间不发消息，也跳过主动发言。 */
+    private readonly mutedUntil;
+    /** 机器人自己的 QQ（配置没填时用 get_login_info 取一次后缓存）。 */
+    private selfQqCache;
     /** 上次「被硬门挡住」的提示时间（防刷屏，每群 10 分钟一条）。 */
     private readonly proactiveNoticeAt;
     /** 记录一条他人消息（供主动发言判断"有没有人在聊"）。 */
@@ -112,6 +116,14 @@ export declare class Bridge {
     /** 投递失败（归档/删除/agent 释放）：丢掉旧会话状态，下次消息重新建会话，并告知用户。 */
     private recoverChat;
     private onSessionEvent;
+    /**
+     * 探测本群机器人是否被禁言（群聊）。
+     * 来源：get_group_member_info 的 shut_up_timestamp（秒）+ get_group_info 的 group_all_shut（全员禁言）。
+     * 返回解禁时间戳（毫秒）：未禁言 = 0；查不到 = undefined（此时不做任何暂停）。
+     */
+    private probeMute;
+    /** 机器人自己的 QQ：配置优先，未配置时用 get_login_info 取一次并缓存。 */
+    private selfQq;
     /** 按 splitMaxChars 分段发送（第一段可带引用）。 */
     private sendText;
 }
