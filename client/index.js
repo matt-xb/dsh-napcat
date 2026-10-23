@@ -70,6 +70,10 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'proactiveQuietHours', label: '主动发言静默时段（如 00:00-08:00,12:00-13:00）', kind: 'text' },
         { key: 'proactiveMinMessages', label: '窗口内至少多少条他人消息才考虑插话', kind: 'number' },
         { key: 'proactiveWindowMinutes', label: '观察窗口（分钟）', kind: 'number' },
+        { key: 'imageCache', label: '群聊图片缓存（存表情包/分享图，便于以后回看）', kind: 'select', options: [['off', 'off：只存叫到机器人时的图'], ['all', 'all：群里的图也存（带配额）']] },
+        { key: 'imageCacheMaxBytes', label: '单张图片缓存上限（字节）', kind: 'number' },
+        { key: 'imageCacheDailyCap', label: '每个聊天每天最多缓存张数', kind: 'number' },
+        { key: 'imageCacheRetentionDays', label: '图片缓存保留天数（超期清理）', kind: 'number' },
       ]
 
       const NS = 'dsh-napcat'

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { base64UrlToBuffer, isHttpUrl, nameFromRef, safeName } from '../lib/media.js'
 import { MemoryStore } from '../lib/memory.js'
 import { decide, inQuietHours, newChatState, parseQuietHours, poissonHit, skipBackoffFactor } from '../lib/proactive.js'
+import { dayKey, urlHash } from '../lib/imagecache.js'
 import { findKeyword, mentions, parseCq, parsePersonaOverrides, rankByFileName, scoreFileName, shortHash, splitText, stripKeyword, titleFrom, toText } from '../lib/text.js'
 import { allowAccess, chatRefOf, sessionIdForChat } from '../lib/chat.js'
 
@@ -197,4 +198,13 @@ test('主动发言：静默时段 / 泊松 / 退避 / 门槛', () => {
 
   const cooling = decide({ now, minuteOfDay: 600, options: base, state: { ...newChatState(), lastSpokeAt: now - 10_000 }, recentOthers: 5, random: () => 0 })
   assert.equal(cooling.reason, 'cooldown')
+})
+test('图片缓存：日期键与 URL 去重 hash', () => {
+  const t = Date.UTC(2026, 9, 23, 4, 0, 0) // 本地 2026-10-23 12:00
+  assert.equal(dayKey(t).length, 8)
+  assert.match(dayKey(t), /^2026\d{4}$/)
+  const a = urlHash('https://example.com/a.jpg')
+  assert.equal(a, urlHash('https://example.com/a.jpg'))
+  assert.notEqual(a, urlHash('https://example.com/b.jpg'))
+  assert.equal(a.length, 10)
 })

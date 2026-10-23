@@ -52,6 +52,10 @@ export interface Config {
     memoryEnabled: boolean;
     memoryBackend: 'mnemon' | 'file';
     memoryAutoCapture: boolean;
+    imageCache: 'off' | 'all';
+    imageCacheMaxBytes: number;
+    imageCacheDailyCap: number;
+    imageCacheRetentionDays: number;
     proactiveEnabled: boolean;
     proactiveRatePerHour: number;
     proactiveChance: number;

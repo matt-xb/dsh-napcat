@@ -26,7 +26,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 | 分组 | 每个聊天自动建一个 **工作区**（侧边栏 `群 1103089802` / `私聊 1000001`）并挂载会话 |
 | 标题 | 首条消息时把会话标题写成 `MM-DD HH:mm` |
 | 记忆 | **群记忆**：每群一个 mnemon 记忆空间（设定/黑话/人物/事实四层）+ 最近消息缓冲（默认 200 条）+ 历史预热；模型自动捕获与更新，无需用户命令 |
-| 主动发言 | **伪人模式**（默认关闭）：群里有话题时按泊松概率自己插一句，接上一句不跑题，没话说自动闭嘴（`__SKIP__`） |
+| 图片缓存 | `imageCache: all` 时把群里的图片/表情包也落盘（`<cwd>/napcat-inbox/imgs/<日期>/`），聊天记录里写成 `[图片:<文件名>]`，之后可 `read_image` 回看；带每日配额/单张上限/过期清理 |`n| 主动发言 | **伪人模式**（默认关闭）：群里有话题时按泊松概率自己插一句，接上一句不跑题，没话说自动闭嘴（`__SKIP__`） |
 | 性格 | 群 / 人性格：`personaOverrides`（`group:<群号>=人设` / `private:<QQ>=人设`），按会话注入 systemPrompt；只影响语气，不复述设定 |
 | 图片（收） | **原生送达**：下载到 `<会话cwd>/napcat-inbox/` → `attachments.admitPromptContent` → `ImageBlock` 进模型请求（视觉模型直接看图）；同时保留 `[图片: <路径>]` 文本兜底 |
 | 文件（收） | 私聊三级兜底：`get_private_file_url` → `get_file` 的 base64 → `get_file` 的 http url；远端 NapCat 只给本机路径时给出明确原因 |
@@ -82,6 +82,25 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 判据是「条数够 **且** 够新」：`warmupHistory`（目标条数）、`warmupStaleMinutes`（新鲜度），不会一直抱着旧聊天。
 
 > ⚠️ 实现要点：mnemon 的记忆操作**必须在模型本轮 turn 内**执行（插件用 `ctx.tools.execute()` 在轮次外调用会被拒绝）。所以插件只负责注入上下文 + 转投命令，**从不自己调用 mnemon 的 recall**。
+
+### 图片与表情包
+
+群里大量的**表情包 / 分享图**默认不会落盘（只有叫到机器人时才下载）。开启缓存后可以留档：
+
+```yaml
+imageCache: all                 # off=只存叫到机器人时的图（默认）；all=群里的图也存
+imageCacheMaxBytes: 2097152     # 单张 ≤ 2MB
+imageCacheDailyCap: 100         # 每个聊天每天最多 100 张
+imageCacheRetentionDays: 7      # 超期目录自动清理
+```
+
+- 落盘位置：`<会话cwd>/napcat-inbox/imgs/<YYYYMMDD>/<hash>-<原名>`
+- **聊天记录里会写成** `[图片:<文件名>]` → 之后模型需要时用 `read_image("/…/imgs/20261023/xxx.jpg")` 回看
+- **去重**：按图片 URL 的 hash，同一张图重复发只存一份
+- **表情**：`[表情]` 段记进 `imgs/faces.jsonl`（谁爱用什么表情，可做后续统计）
+- **记忆里不写图片字节**：mnemon 只记"谁爱发什么梗/图"这类结论（自动捕获规则会处理），避免把空间撑爆
+
+> 磁盘提示：`all` 模式按 100 张/天/群 + 7 天保留，单群稳定在几百 MB 以内；像 `E:\dsnworkspace\napcat\group-xxx\napcat-inbox\imgs` 可随时手动清空。
 
 ## 主动发言（伪人模式）
 
@@ -208,6 +227,10 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `injectMaxChars` | `4000` | 记忆注入总字符上限（超出截断并提示压缩） |
 | `warmupHistory` | `0` | 预热目标条数（0=关闭）；缓冲不足时用历史接口补齐 |
 | `warmupStaleMinutes` | `10` | 缓冲最新一条超过多少分钟视为过期、需要重新预热 |
+| `imageCache` | `off` | 群聊图片缓存：`all`=把群里的图片/表情包也落盘（默认只在叫到机器人时存） |
+| `imageCacheMaxBytes` | `2097152` | 单张图片缓存上限（2MB） |
+| `imageCacheDailyCap` | `100` | 每个聊天每天最多缓存张数 |
+| `imageCacheRetentionDays` | `7` | 图片缓存保留天数（超期自动清理） |
 | `proactiveEnabled` | `false` | 主动发言（伪人模式）总开关 |
 | `proactiveRatePerHour` | `1.5` | 泊松 λ：每小时期望主动发言次数（0=改用固定概率） |
 | `proactiveChance` | `0.02` | 固定概率模式的插话概率（λ>0 时不生效） |

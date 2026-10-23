@@ -40,6 +40,16 @@ export declare class Bridge {
     stop(): Promise<void>;
     /** 一条 OneBot 事件进站。 */
     handleEvent(event: ObEvent): Promise<void>;
+    /** 每个 cwd 一个图片缓存（配额/清理按 cwd 独立）。 */
+    private readonly imageCaches;
+    /** 已经清理过过期目录的 cwd。 */
+    private readonly imageCacheSwept;
+    private imageCacheFor;
+    /**
+     * 观察层用：把消息里的图片落盘（imageCache=all 时），并把文件名写进聊天记录，
+     * 这样之后能用 read_image 回头看群里的图/表情包。
+     */
+    private prepareRecentText;
     /** 每聊天的主动发言状态。 */
     private readonly proactiveStates;
     /** 该聊天最近「他人消息」的时间戳（观察窗口内计数用）。 */

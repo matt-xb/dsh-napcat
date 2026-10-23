@@ -26,6 +26,7 @@ import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.j
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { MemoryStore } from './memory.js'
+import { ImageCache } from './imagecache.js'
 import { decide, newChatState, parseQuietHours, pruneSentAt, type ChatProactiveState } from './proactive.js'
 import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, base64UrlToBuffer, downloadToFile, ensureInbox, imageMediaType, nameFromRef } from './media.js'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
@@ -147,6 +148,73 @@ export class Bridge {
       this.debugLog(cwd, '出站异常: ' + describe(error))
       throw error
     }
+  }
+
+  // ── 群聊图片缓存 ──
+  /** 每个 cwd 一个图片缓存（配额/清理按 cwd 独立）。 */
+  private readonly imageCaches = new Map<string, ImageCache>()
+  /** 已经清理过过期目录的 cwd。 */
+  private readonly imageCacheSwept = new Set<string>()
+
+  private imageCacheFor(cwd: string): ImageCache {
+    const existing = this.imageCaches.get(cwd)
+    if (existing !== undefined) return existing
+    const cache = new ImageCache({
+      cwd,
+      maxBytes: this.opts.config.imageCacheMaxBytes,
+      dailyCap: this.opts.config.imageCacheDailyCap,
+      retentionDays: this.opts.config.imageCacheRetentionDays,
+      log: this.opts.log,
+    })
+    this.imageCaches.set(cwd, cache)
+    if (!this.imageCacheSwept.has(cwd)) {
+      this.imageCacheSwept.add(cwd)
+      void cache.sweep().then(removed => {
+        if (removed > 0) this.opts.log('info', '清理过期图片缓存目录 ' + removed + ' 个: ' + cwd)
+      })
+    }
+    return cache
+  }
+
+  /**
+   * 观察层用：把消息里的图片落盘（imageCache=all 时），并把文件名写进聊天记录，
+   * 这样之后能用 read_image 回头看群里的图/表情包。
+   */
+  private async prepareRecentText(ref: ChatRef, msg: ObMessageEvent, rawText: string, nick: string): Promise<string> {
+    const segments = segmentsOf(msg.message)
+    const images = segments.filter(seg => seg.type === 'image')
+    const faces = segments.filter(seg => seg.type === 'face' || seg.type === 'mface')
+    if (this.opts.config.imageCache === 'off') {
+      return faces.length > 0 ? rawText.replace(/\[表情\]/g, '[表情]') : rawText
+    }
+    if (images.length === 0 && faces.length === 0) return rawText
+    let cwd = this.opts.config.workspacePath.trim()
+    try {
+      cwd = await this.cwdFor(ref)
+    } catch {
+      // 用工作区根目录兜底
+    }
+    const cache = this.imageCacheFor(cwd)
+    for (const face of faces.slice(0, 3)) {
+      const name = String((face.data as { id?: unknown; name?: unknown }).name ?? (face.data as { id?: unknown }).id ?? '')
+      if (name !== '') void cache.noteFace(ref.key, nick, name)
+    }
+    const saved: string[] = []
+    for (const seg of images.slice(0, 3)) {
+      const fileRef = String((seg.data as { file?: unknown }).file ?? '')
+      if (fileRef === '') continue
+      try {
+        const info = await this.opts.conn.call<{ url?: string }>('get_image', { file: fileRef })
+        const url = info?.url
+        if (typeof url !== 'string' || url === '') continue
+        const hit = await cache.save({ url, chatKey: ref.key, nick, name: nameFromRef(fileRef, 'image.png') })
+        if (hit !== undefined) saved.push(hit.name)
+      } catch (error) {
+        this.opts.log('debug', '图片缓存失败（已跳过）: ' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    if (saved.length === 0) return rawText
+    return rawText.replace(/\[图片\]/g, '') + ' [图片:' + saved.join(',') + ']'
   }
 
   // ── 主动发言（伪人模式）──
@@ -313,7 +381,15 @@ export class Bridge {
     // ── 观察层：在 @门控之前，所有消息（不管有没有叫到机器人）都记进缓冲 ──
     const senderNick = String((msg.sender as { nickname?: unknown } | undefined)?.nickname ?? userId)
     if (this.opts.config.memoryEnabled) {
-      void this.mem.appendRecent(ref.key, { nick: senderNick, text: rawText })
+      if (this.opts.config.imageCache === 'all') {
+        // 图片要落盘并写进记录（异步，不阻塞本条消息处理）
+        void (async () => {
+          const text = await this.prepareRecentText(ref, msg, rawText, senderNick)
+          await this.mem.appendRecent(ref.key, { nick: senderNick, text })
+        })()
+      } else {
+        void this.mem.appendRecent(ref.key, { nick: senderNick, text: rawText })
+      }
       if (this.opts.config.warmupHistory > 0) {
         void this.maybeWarmup(ref)
       }

@@ -1,0 +1,158 @@
+/**
+ * 群聊图片缓存：把群里的图片（含表情包）落到会话目录，供之后 read_image / 视觉模型回看。
+ *
+ * 约束（防止把磁盘吃满）：
+ * - 每条消息最多存 3 张
+ * - 单张 ≤ maxBytes（默认 2MB）
+ * - 每个聊天每天 ≤ dailyCap 张（默认 100）
+ * - 超过 retentionDays 的目录在启动/写入时清理
+ * - 按 URL 取 hash 去重（同一张图重复发只存一份）
+ */
+
+import { createHash } from 'node:crypto'
+import { mkdir, readdir, rm, stat, writeFile, appendFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
+import { downloadToFile } from './media.js'
+import type { LogLevel } from './onebot.js'
+
+export interface ImageCacheOptions {
+  /** 会话 cwd（图片落在 <cwd>/napcat-inbox/imgs/） */
+  cwd: string
+  maxBytes: number
+  dailyCap: number
+  retentionDays: number
+  log: (level: LogLevel, message: string) => void
+}
+
+export interface CachedImage {
+  /** 绝对路径 */
+  path: string
+  /** 相对 imgs 根目录的名字（用于写进聊天记录） */
+  name: string
+  bytes: number
+}
+
+/** 每天目录名：YYYYMMDD（本地时区）。 */
+export function dayKey(now: number): string {
+  const d = new Date(now)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate())
+}
+
+/** 用图片 URL 生成稳定短 hash（同一张图重复发只存一份）。 */
+export function urlHash(url: string): string {
+  return createHash('sha1').update(url).digest('hex').slice(0, 10)
+}
+
+export class ImageCache {
+  constructor(private readonly opts: ImageCacheOptions) {}
+
+  private get root(): string {
+    return join(this.opts.cwd, 'napcat-inbox', 'imgs')
+  }
+
+  /** 清理超过保留天数的日期目录。 */
+  async sweep(now = Date.now()): Promise<number> {
+    let removed = 0
+    try {
+      const dirs = await readdir(this.root, { withFileTypes: true })
+      const cutoff = now - this.opts.retentionDays * 86_400_000
+      for (const entry of dirs) {
+        if (!entry.isDirectory() || !/^\d{8}$/.test(entry.name)) continue
+        const dayPath = join(this.root, entry.name)
+        try {
+          const info = await stat(dayPath)
+          if (info.mtimeMs < cutoff) {
+            await rm(dayPath, { recursive: true, force: true })
+            removed += 1
+          }
+        } catch {
+          // 忽略单项失败
+        }
+      }
+    } catch {
+      // 目录还不存在
+    }
+    return removed
+  }
+
+  /** 当天已存张数。 */
+  async countToday(now = Date.now()): Promise<number> {
+    try {
+      const entries = await readdir(join(this.root, dayKey(now)))
+      return entries.length
+    } catch {
+      return 0
+    }
+  }
+
+  /** 存一张图；超限/去重命中时返回 undefined 或已有路径。 */
+  async save(input: {
+    url: string
+    chatKey: string
+    nick: string
+    name: string
+    now?: number
+  }): Promise<CachedImage | undefined> {
+    const now = input.now ?? Date.now()
+    const day = dayKey(now)
+    const dir = join(this.root, day)
+    const hash = urlHash(input.url)
+    const safe = input.name.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_').slice(0, 40)
+    const fileName = hash + '-' + safe
+    const target = join(dir, fileName)
+    try {
+      // 去重：同一天同 hash 已存在
+      const existing = await stat(target)
+      if (existing.size > 0) return { path: target, name: fileName, bytes: existing.size }
+    } catch {
+      // 不存在，继续
+    }
+    if ((await this.countToday(now)) >= this.opts.dailyCap) {
+      this.opts.log('debug', '图片缓存达到每日上限，跳过: ' + input.chatKey)
+      return undefined
+    }
+    try {
+      await mkdir(dir, { recursive: true })
+      const saved = await downloadToFile(input.url, dir, fileName, this.opts.maxBytes)
+      try {
+        await appendFile(
+          join(this.root, 'index.jsonl'),
+          JSON.stringify({ t: now, chat: input.chatKey, nick: input.nick.slice(0, 24), file: day + '/' + fileName, bytes: saved.bytes }) + '\n',
+          'utf8',
+        )
+      } catch {
+        // 索引失败不影响图片
+      }
+      return { path: saved.path, name: fileName, bytes: saved.bytes }
+    } catch (error) {
+      this.opts.log('debug', '图片缓存失败: ' + (error instanceof Error ? error.message : String(error)))
+      return undefined
+    }
+  }
+
+  /** 把纯文本证据写一份（表情包名称之类），便于以后统计常用表情。 */
+  async noteFace(chatKey: string, nick: string, face: string, now = Date.now()): Promise<void> {
+    try {
+      await mkdir(this.root, { recursive: true })
+      await appendFile(
+        join(this.root, 'faces.jsonl'),
+        JSON.stringify({ t: now, chat: chatKey, nick: nick.slice(0, 24), face: face.slice(0, 40) }) + '\n',
+        'utf8',
+      )
+    } catch {
+      // 忽略
+    }
+  }
+
+  /** 写一小段统计（可选调用）。 */
+  async writeSummary(text: string): Promise<void> {
+    try {
+      await mkdir(this.root, { recursive: true })
+      await writeFile(join(this.root, 'summary.txt'), text, 'utf8')
+    } catch {
+      // 忽略
+    }
+  }
+}
