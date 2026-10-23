@@ -68,6 +68,8 @@ export declare class MemoryStore {
         text: string;
         at?: number;
     }>): Promise<number>;
+    /** 读最近 N 条的时间戳（启动后用它初始化"有人在聊"的滑动窗口）。 */
+    recentTimestamps(chatKey: string, limit?: number): Promise<number[]>;
     /** 缓冲里最新一条的时间戳（毫秒；空=0）。用于判断缓冲是否"过期"。 */
     recentNewestAt(chatKey: string): Promise<number>;
     /** 当前缓冲条数（用于判断是否需要预热）。 */

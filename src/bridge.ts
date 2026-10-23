@@ -231,9 +231,18 @@ export class Bridge {
   private noteChatter(ref: ChatRef): void {
     const now = Date.now()
     const windowMs = this.opts.config.proactiveWindowMinutes * 60_000
-    const list = (this.chatter.get(ref.key) ?? []).filter(at => now - at < windowMs)
+    const cached = this.chatter.get(ref.key)
+    const list = (cached ?? []).filter(at => now - at < windowMs)
     list.push(now)
     this.chatter.set(ref.key, list)
+    // 重启后第一次计数：用缓冲里的历史时间戳补齐（否则"近 10 分钟"永远从 0 开始，刚重启就被拦）
+    if (cached === undefined && this.opts.config.proactiveEnabled) {
+      void this.mem.recentTimestamps(ref.key, 200).then(stamps => {
+        const merged = [...stamps, ...(this.chatter.get(ref.key) ?? [])].filter(at => Date.now() - at < windowMs)
+        merged.sort((left, right) => left - right)
+        this.chatter.set(ref.key, merged)
+      })
+    }
   }
 
   /**
@@ -269,16 +278,16 @@ export class Bridge {
     this.proactiveStates.set(ref.key, state)
     if (!decision.send) {
       this.opts.log('debug', '主动发言不触发(' + decision.reason + '): ' + ref.key)
-      // 被"硬门"挡住时用 info 说明一次（每群 10 分钟最多一条），方便不开发 debug 也能看出原因
+      // 被"硬门"挡住时用 info 说明一次（每群 3 分钟最多一条），带上**实际计数**便于判断是配置还是逻辑问题
       if (decision.reason !== 'poisson-miss' && decision.reason !== 'chance-miss' && decision.reason !== 'disabled') {
         const lastNotice = this.proactiveNoticeAt.get(ref.key) ?? 0
-        if (now - lastNotice > 10 * 60_000) {
+        if (now - lastNotice > 3 * 60_000) {
           this.proactiveNoticeAt.set(ref.key, now)
           const hint: Record<string, string> = {
             'quiet-hours': '当前在静默时段',
             cooldown: '距上次发言不足 ' + cfg.proactiveCooldownMinutes + ' 分钟',
             'hourly-cap': '本小时已达 ' + cfg.proactiveMaxPerHour + ' 条上限',
-            'not-enough-chatter': '近 ' + cfg.proactiveWindowMinutes + ' 分钟少于 ' + cfg.proactiveMinMessages + ' 条他人消息',
+            'not-enough-chatter': '近 ' + cfg.proactiveWindowMinutes + ' 分钟只有 ' + recentOthers + ' 条他人消息（门槛 ' + cfg.proactiveMinMessages + '）',
             'chance-zero': 'proactiveChance=0 且未设 λ',
           }
           this.opts.log('info', '主动发言暂不触发（' + (hint[decision.reason] ?? decision.reason) + '）: ' + ref.key)
