@@ -30,6 +30,8 @@ export declare function shortHash(text: string): string;
 export declare function parsePersonaOverrides(raw: string): Map<string, string>;
 /** Internal context must never be forwarded to QQ. */
 export declare function sanitizeReply(text: string): string | null;
+/** Compact short Chinese prose only; preserve structured and long-form output. */
+export declare function compactShortReply(text: string): string;
 /** Same-turn comparison only; preserve numbers, code and emotional punctuation. */
 export declare function replyDedupKey(text: string): string;
 /** Tool and automatic sends share this wire boundary. */

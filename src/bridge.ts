@@ -24,7 +24,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Config } from './config.js'
 import { allowAccess, chatRefOf, sessionIdForChat, type ChatRef } from './chat.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, replyDedupKey, sanitizeReply, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
+import { findKeyword, mentions, parsePersonaOverrides, repliesTo, repliesToAny, replyDedupKey, compactShortReply, sanitizeReply, segmentsOf, shortHash, splitText, stripKeyword, titleFrom, toText } from './text.js'
 import { BackgroundTasks, registerTaskTools } from './tasks.js'
 import { MemoryStore } from './memory.js'
 import { ImageCache } from './imagecache.js'
@@ -39,6 +39,7 @@ type HostContext = Context & { agents: AgentRegistry }
 /** 投递后多久没收到 turn/start 就判定会话失效。 */
 const WATCHDOG_MS = 10000
 const TEXT_REPLY_RULES = `【QQ回复】
+闲聊默认一句短话、单行，通常5到25字，不凑字数。不解释自己的接话策略，不分析对方问号的几种可能意思；没懂只短问一句，不追加保证、总结或服务式收尾。认真求助、知识步骤才展开，代码、列表及明确要求的排版保留必要换行。
 有贴切的已审核表情包时优先直接发图，表达不了再用文字，不凑发图比例。没有回复价值可以只输出 [[NAPCAT_SILENT]]。
 普通文字直接最终回复，由桥发送。若本轮已用文字工具成功发完当前聊天，桥不再补发最终回答，补充内容也用工具发送；其他聊天、仅发图或发送失败不接管当前聊天文字。`
 const GROUP_REPLY_RULES = `【群聊边界】
@@ -1360,7 +1361,7 @@ export class Bridge {
         this.opts.log('info', '主动发言已发出: ' + key + '（本小时第 ' + state.sentAt.length + ' 条）')
       }
       if (text !== '') {
-        void this.sendText(chat, text)
+        void this.sendText(chat, compactShortReply(text))
       } else if (reason.kind === 'error') {
         if (!chat.toolTextComplete) void this.sendText(chat, '⚠️ 本轮回复失败，请稍后再试')
           // 会话存储文件被外部删掉时会 ENOENT：丢状态 + 换新 id，下一条消息自然新建日志

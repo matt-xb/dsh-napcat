@@ -94,9 +94,19 @@ for (const kind of ['private', 'group']) {
     } })
     f.end(1); f.end(1); await tick()
     assert.equal(f.sent.length, 1)
-    assert.equal(f.sent[0].params.message[0].data.text, '明天可能下雨，出门带把伞。\n记得检查伞有没有坏')
+    assert.equal(f.sent[0].params.message[0].data.text, '明天可能下雨，出门带把伞。 记得检查伞有没有坏')
     assert.equal(f.memory.length, 1); assert.equal(f.memory[0][1].text, f.sent[0].params.message[0].data.text)
     f.start(2); f.message('下一轮照常', 2); f.end(2); await tick(); assert.equal(f.sent.length, 2)
+  })
+}
+
+for (const kind of ['private', 'group']) {
+  test(kind + ': short automatic prose is one line and memory matches delivered text', async () => {
+    const f = fixture(kind); f.start(1); f.message('好呀\n\n下午见'); f.end(1); await tick()
+    assert.equal(f.sent[0].params.message[0].data.text, '好呀 下午见')
+    assert.equal(f.memory[0][1].text, '好呀 下午见')
+    f.start(2); f.message('准备：\n- 雨衣\n- 雨靴', 2); f.end(2); await tick()
+    assert.equal(f.sent[1].params.message[0].data.text, '准备：\n- 雨衣\n- 雨靴')
   })
 }
 
