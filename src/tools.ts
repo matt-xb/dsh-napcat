@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 import type { LogLevel, OneBotConnection } from './onebot.js'
-import { DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, downloadToFile, ensureTempDir, localToBase64Url, sourceToBase64Url } from './media.js'
+import { isHttpUrl, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, downloadToFile, ensureTempDir, localToBase64Url, sourceToBase64Url } from './media.js'
 import { rankByFileName } from './text.js'
 import { sanitizeOutgoingMessage, sanitizeReply, segmentsOf, splitText } from './text.js'
 import { findStickers } from './stickers.js'
@@ -47,8 +47,7 @@ export interface ToolDeps {
   keyForSession?: (sessionId: string) => string | undefined
   targetAllowed?: (sessionId: string, chatKey: string) => boolean
   trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined
-  /** Successful QQ media delivery, independent of optional image-history persistence. */
-  recordMediaSend?: (sessionId: string, chatKey: string) => void
+  taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: { kind: 'image' | 'file'; url: string; name: string; caption?: string }) => Promise<void>) | undefined
   recordImageSend?: (chatKey: string, source: string, name: string) => Promise<void>
   recentImages?: (chatKey: string) => Promise<string[]>
   stickerRoot?: string
@@ -71,7 +70,7 @@ export function registerTools(
   const maxFileBytes = deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
   const checkTarget = (exec: unknown, chatKey: string): void => {
     const sessionId = (exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id
-    if (deps.targetAllowed?.(String(sessionId ?? ''), chatKey) === false) throw new Error('后台任务不能向其他QQ聊天发送消息')
+    if (deps.targetAllowed?.(String(sessionId ?? ''), chatKey) === false) throw new Error('后台任务不能直接发送QQ消息，请交回主智能体')
   }
 
   /** 解析目标会话：显式 chat_id 优先，否则用当前 agent 的会话。 */
@@ -212,9 +211,6 @@ export function registerTools(
       const sent = pureText ? deps.trackTextSend?.(String(exec?.agent?.session?.id ?? ''), targetKind + ':' + String(targetId)) : undefined
       const data = await conn.call<unknown>(input.action, params)
       if (pureText) await sent?.(segments.filter(seg => seg.type === 'text').map(seg => String(seg.data?.text ?? '')).join(''), true)
-      if (segments.some(seg => seg.type === 'image' || seg.type === 'file')) {
-        deps.recordMediaSend?.(String(exec?.agent?.session?.id ?? ''), targetKind + ':' + String(targetId))
-      }
       return JSON.stringify(data ?? null, null, 2)
     },
   }))
@@ -251,6 +247,13 @@ export function registerTools(
     execute: async (args, exec) => {
       const input = args as { source: string; chat_id?: string; caption?: string }
       const target = resolveChat(input.chat_id, exec)
+      const receive = deps.taskMediaReceiver?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
+      if (receive) {
+        if (isHttpUrl(input.source)) throw new Error('后台任务媒体交接只接受本地路径，不下载远端URL')
+        const image = await sourceToBase64Url(input.source, maxImageBytes)
+        await receive({ kind: 'image', ...image, caption: input.caption })
+        return '图片已登记交回主智能体检查，尚未发送QQ'
+      }
       checkTarget(exec, target.kind + ':' + target.id)
       const image = await sourceToBase64Url(input.source, maxImageBytes)
       const message: Array<Record<string, unknown>> = []
@@ -259,7 +262,6 @@ export function registerTools(
       }
       message.push({ type: 'image', data: { file: image.url } })
       const id = await sendSegments(target, message, exec)
-      deps.recordMediaSend?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
       try { await deps.recordImageSend?.(target.kind + ':' + target.id, input.source, image.name) }
       catch (error) { log('warn', '图片已送达但记录失败: ' + String(error)) }
       log('info', '工具发图片 ' + String(target.id) + ' (' + Math.round(image.bytes / 1024) + 'KB)')
@@ -280,6 +282,13 @@ export function registerTools(
     execute: async (args, exec) => {
       const input = args as { path: string; chat_id?: string; name?: string }
       const target = resolveChat(input.chat_id, exec)
+      const receive = deps.taskMediaReceiver?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
+      if (receive) {
+        if (isHttpUrl(input.path)) throw new Error('后台任务媒体交接只接受本地路径')
+        const file = await localToBase64Url(input.path, maxFileBytes)
+        await receive({ kind: 'file', ...file, name: input.name || file.name })
+        return '文件已登记交回主智能体检查，尚未发送QQ'
+      }
       checkTarget(exec, target.kind + ':' + target.id)
       const file = await localToBase64Url(input.path, maxFileBytes)
       const displayName = typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : file.name
@@ -287,7 +296,6 @@ export function registerTools(
       // ① 先试文件消息段（部分 NapCat 版本支持 base64）
       try {
         const id = await sendSegments(target, [{ type: 'file', data: { file: file.url, name: displayName } }], exec)
-        deps.recordMediaSend?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
         log('info', '工具发文件（file 段）' + String(target.id) + ' (' + Math.round(file.bytes / 1024) + 'KB)')
         return '已发送文件 ' + displayName + '（' + Math.round(file.bytes / 1024) + 'KB）' + (id === undefined ? '' : '，message_id: ' + id)
       } catch (error) {
@@ -302,7 +310,6 @@ export function registerTools(
         } else {
           await conn.call('upload_private_file', { user_id: target.id, file: file.url, name: displayName })
         }
-        deps.recordMediaSend?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
         log('info', '工具发文件（upload）' + String(target.id) + ' (' + Math.round(file.bytes / 1024) + 'KB)')
         return '已通过上传接口发送文件 ' + displayName + '（' + Math.round(file.bytes / 1024) + 'KB）'
       } catch (error) {

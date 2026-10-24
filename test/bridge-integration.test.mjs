@@ -4,16 +4,16 @@ import { Bridge } from '../lib/bridge.js'
 import { registerTools } from '../lib/tools.js'
 import { OneBotConnection } from '../lib/onebot.js'
 import { resolveConfig } from '../lib/config.js'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function fixture(kind = 'group') {
-  const sent = [], memory = [], registry = new Map(), tools = new Map()
-  const agent = { session: { id: 'front', header: { cwd: process.cwd() } }, followup() {} }
+  const sent = [], memory = [], registry = new Map(), tools = new Map(), queued = [], listeners = new Map()
+  const agent = { session: { id: 'front', header: { cwd: process.cwd() } }, followup(message) { queued.push(message) } }
   registry.set('front', agent)
-  const ctx = { agents: { get: id => registry.get(id) }, tools: { register: t => tools.set(t.name, t) }, on() { return () => {} } }
+  const ctx = { agents: { get: id => registry.get(id) }, tools: { register: t => tools.set(t.name, t) }, on(name, cb) { listeners.set(name, cb); return () => listeners.delete(name) } }
   const conn = { call: async (action, params) => { sent.push({ action, params }); return { message_id: sent.length } } }
   const b = new Bridge({ ctx, conn, config: resolveConfig({ dmPolicy: 'open', groupPolicy: 'open', memoryEnabled: true, replyAsQuote: false, sendIntervalMs: 0 }), log() {} })
   b.mem.appendRecent = async (...args) => memory.push(args)
@@ -25,73 +25,105 @@ function fixture(kind = 'group') {
   registerTools(ctx, conn, () => {}, {
     keyForSession: id => b.keyForSession(id), trackTextSend: (id, key) => b.trackTextSend(id, key),
     targetAllowed: (id, key) => b.taskTargetAllowed(id, key),
-    recordMediaSend: (id, key) => b.recordMediaSend(id, key),
+    taskMediaReceiver: (id, key) => b.taskMediaReceiver(id, key),
   })
   const emit = (type, data) => b.onSessionEvent(agent.session, { type, data })
   const start = turn => emit('turn/start', { turn })
   const message = (text, turn = 1, extra = {}, step = 1) => emit('assistant/message', { turn, step, message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text }], ...extra } })
   const end = turn => emit('turn/end', { turn, reason: { kind: 'completed' } })
-  return { b, ctx, conn, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, exec: { agent } }
+  return { b, ctx, conn, queued, listeners, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, exec: { agent } }
 }
 async function startWorker(f) {
   let resolve
   const result = new Promise(r => { resolve = r })
   f.ctx.subagents = { startActivation: async spec => ({ childId: spec.childId, result }) }
   const { childId } = await f.b.tasks.start({ parent: f.agent, chatKey: f.key, prompt: [] })
-  return { childId, exec: { agent: { session: { id: childId } } }, finish: (stopReason = 'completed') => resolve({ output: [{ type: 'text', text: 'host final result' }], stopReason }) }
+  return { childId, exec: { agent: { session: { id: childId } } }, finish: async (stopReason = 'completed') => { resolve({ output: [{ type: 'text', text: 'host final result' }], stopReason }); await tick(); await f.b.tasks.tasks.get(childId).delivery?.catch(() => {}) } }
 }
 
-test('background image and file tools finish silently after successful segment or upload delivery to the origin', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'napcat-media-test-')); t.after(() => rm(dir, { recursive: true, force: true }))
-  const path = join(dir, 'synthetic.png')
-  await writeFile(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jwXkAAAAASUVORK5CYII=', 'base64'))
-  for (const [name, kind, fallback] of [['napcat_send_image', 'group', false], ['napcat_send_file', 'private', false], ['napcat_send_file', 'group', true]]) {
-    const f = fixture(kind), worker = await startWorker(f), call = f.conn.call
-    if (fallback) f.conn.call = (action, params) => action === 'send_msg' ? Promise.reject(Error('segment unsupported')) : call(action, params)
-    await f.tools.get(name).execute(name.endsWith('image') ? { source: path } : { path }, worker.exec)
-    assert.equal(f.sent.length, 1)
-    assert.equal(f.sent[0].params[kind === 'group' ? 'group_id' : 'user_id'], '100')
-    if (fallback) assert.equal(f.sent[0].action, 'upload_group_file')
-    else assert.equal(f.sent[0].params.message[0].type, name.endsWith('image') ? 'image' : 'file')
-    worker.finish(); await tick()
-    assert.equal(f.sent.length, 1, name + ': no automatic summary or task-ID completion message')
-    assert.match(f.b.tasks.status(f.key), /completed.*已回传/)
-  }
+test('worker text and raw sends are blocked even to origin; text returns to original parent queue once', async () => {
+  const f = fixture(), worker = await startWorker(f)
+  for (const [name, args] of [
+    ['napcat_send_message', { chat_id: f.key, text: 'blocked' }],
+    ['napcat_api', { action: 'send_group_msg', params_json: '{"group_id":"100","message":"blocked"}' }],
+  ]) await assert.rejects(f.tools.get(name).execute(args, worker.exec), /后台任务/)
+  f.start(1); f.message('still chatting')
+  worker.finish(); worker.finish(); await tick()
+  assert.equal(f.sent.length, 0); assert.equal(f.queued.length, 1)
+  assert.match(f.queued[0].content.at(-1).text, /host final result/)
+  assert.equal(f.chat.taskResultTurn, undefined)
+  f.end(1); await tick(); assert.equal(f.sent.length, 1)
+  f.emit('user/message', f.queued[0]); f.start(2)
+  assert.equal(f.chat.taskResultTurn, true); assert.deepEqual(f.chat.taskInput, [])
+  assert.equal(f.b.taskTargetAllowed('front', 'private:200'), false)
+  await assert.rejects(f.tools.get('napcat_task_start').execute({ prompt: 'loop' }, f.exec), /回执轮/)
+  f.message('reviewed result', 2); f.end(2); f.end(2); await tick()
+  assert.equal(f.sent.length, 2); assert.equal(f.sent[1].params.message[0].data.text, 'reviewed result')
+  assert.equal(f.chat.startTimer, undefined); assert.equal(f.chat.lastText, undefined)
 })
 
-test('failed background image and file sends leave the host final result deliverable', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'napcat-media-failure-test-')); t.after(() => rm(dir, { recursive: true, force: true }))
-  const path = join(dir, 'synthetic.bin'); await writeFile(path, 'synthetic media')
+test('worker local image/file snapshots are admitted to parent; only parent sends after checking', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-task-media-')); t.after(() => rm(dir, { recursive: true, force: true }))
+  const source = join(dir, 'synthetic.png')
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jwXkAAAAASUVORK5CYII=', 'base64')
   for (const name of ['napcat_send_image', 'napcat_send_file']) {
-    const f = fixture(), worker = await startWorker(f), call = f.conn.call
-    f.conn.call = async () => { throw Error('transport rejected') }
-    await assert.rejects(f.tools.get(name).execute(name.endsWith('image') ? { source: path } : { path }, worker.exec))
-    f.conn.call = call; worker.finish(); await tick()
-    assert.equal(f.sent.length, 1)
-    assert.match(f.sent[0].params.message[0].data.text, /host final result/)
+    await writeFile(source, bytes)
+    const f = fixture(), admitted = []
+    f.agent.session.header.cwd = dir
+    f.ctx.attachments = { admitPromptContent: async parts => { admitted.push(...parts); return [{ type: 'image', attachmentId: 'host-admitted-reference' }] } }
+    const worker = await startWorker(f)
+    const args = name.endsWith('image') ? { source } : { path: source, name: '../safe.png' }
+    assert.match(await f.tools.get(name).execute(args, worker.exec), /尚未发送QQ/)
+    assert.equal(f.sent.length, 0)
+    await writeFile(source, 'changed after staging')
+    await worker.finish()
+    assert.equal(f.queued.length, 1)
+    const receipt = JSON.parse(f.queued[0].content.at(-1).text.split('\n').at(-1))
+    const media = receipt.media[0]
+    assert.deepEqual(await readFile(media.path), bytes)
+    assert.equal(media.name.includes('/'), false)
+    assert.equal(admitted.length, name.endsWith('image') ? 1 : 0)
+    if (admitted.length) assert.equal(admitted[0].data, bytes.toString('base64'))
+    f.emit('user/message', f.queued[0]); f.start(1)
+    await f.tools.get(name).execute(name.endsWith('image') ? { source: media.path } : { path: media.path, name: media.name }, f.exec)
+    f.end(1); await tick(); assert.equal(f.sent.length, 1)
   }
 })
 
-test('raw background send actions suppress completion only for successful image or file segments', async () => {
-  for (const [action, kind, message, silent] of [
-    ['send_msg', 'group', [{ type: 'image', data: { file: 'base64://synthetic' } }], true],
-    ['send_group_msg', 'group', [{ type: 'file', data: { file: 'base64://synthetic', name: 'synthetic.bin' } }], true],
-    ['send_private_msg', 'private', [{ type: 'text', data: { text: 'caption' } }, { type: 'image', data: { file: 'base64://synthetic' } }], true],
-    ['send_group_msg', 'group', [{ type: 'at', data: { qq: '200' } }], false],
-  ]) {
-    const f = fixture(kind), worker = await startWorker(f)
-    const params = { message, [kind === 'group' ? 'group_id' : 'user_id']: '100' }
-    if (action === 'send_msg') params.message_type = kind
-    await f.tools.get('napcat_api').execute({ action, params_json: JSON.stringify(params) }, worker.exec)
+test('worker media rejects wrong chat, remote URL, missing or oversize assets before QQ', async t => {
+  const f = fixture(), worker = await startWorker(f)
+  await assert.rejects(f.tools.get('napcat_send_image').execute({ source: 'https://example.invalid/secret' }, worker.exec), /本地路径/)
+  await assert.rejects(f.tools.get('napcat_send_image').execute({ chat_id: 'group:200', source: 'missing' }, worker.exec), /目标/)
+  await assert.rejects(f.tools.get('napcat_send_file').execute({ path: 'missing' }, worker.exec), /ENOENT/)
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-task-large-')); t.after(() => rm(dir, { recursive: true, force: true }))
+  const path = join(dir, 'large.bin'); await writeFile(path, Buffer.alloc(21 * 1024 * 1024))
+  await assert.rejects(f.tools.get('napcat_send_file').execute({ path }, worker.exec), /超过上限/)
+  assert.equal(f.sent.length, 0)
+  worker.finish('error'); await tick(); assert.equal(f.queued.length, 1)
+  assert.match(f.queued[0].content.at(-1).text, /任务未成功结束/)
+  assert.doesNotMatch(f.queued[0].content.at(-1).text, /host final result/)
+})
+
+test('parent rejection, replacement, plugin stop, or archive never reroute or mark delivered', async () => {
+  for (const state of ['reject', 'replace', 'stop', 'archive']) {
+    const f = fixture(), worker = await startWorker(f)
+    if (state === 'reject') f.agent.followup = async () => { throw Error('rejected') }
+    if (state === 'replace') f.b.chats.set(f.key, { ...f.chat, agent: {} })
+    if (state === 'stop') await f.b.stop()
+    if (state === 'archive') f.listeners.get('workspace/session-stop')({ sessionId: 'front' })
     worker.finish(); await tick()
-    assert.equal(f.sent.length, silent ? 1 : 2, action + ': media ownership must match actual segments')
-    if (!silent) assert.match(f.sent[1].params.message[0].data.text, /host final result/)
+    assert.equal(f.sent.length, 0); assert.equal(f.queued.length, 0)
+    assert.match(f.b.tasks.status(f.key), /未回传/)
   }
-  const f = fixture(), worker = await startWorker(f), call = f.conn.call
-  f.conn.call = async () => { throw Error('raw media rejected') }
-  await assert.rejects(f.tools.get('napcat_api').execute({ action: 'send_group_msg', params_json: JSON.stringify({ group_id: '100', message: [{ type: 'image', data: { file: 'base64://synthetic' } }] }) }, worker.exec))
-  f.conn.call = call; worker.finish(); await tick()
-  assert.equal(f.sent.length, 1); assert.match(f.sent[0].params.message[0].data.text, /host final result/)
+})
+
+test('stopping parent interrupts existing workers but new tasks in same resumed parent still return', async () => {
+  const f = fixture(), old = await startWorker(f)
+  f.listeners.get('workspace/session-stop')({ sessionId: 'front' })
+  const fresh = await startWorker(f)
+  old.finish(); fresh.finish(); await tick()
+  assert.equal(f.queued.length, 1); assert.equal(f.sent.length, 0)
+  assert.match(f.b.tasks.status(f.key), /interrupted/)
 })
 
 test('frontend media delivery does not suppress its normal final text', async t => {
@@ -293,9 +325,9 @@ test('worker permissions stay bound; descendants, missing parents and cycles can
   const { childId } = await f.b.tasks.start({ parent: f.agent, chatKey: f.key, prompt: [] })
   const workerRules = f.b.personaText({ agent: { session: { id: childId } } })
   assert.match(workerRules, /napcat_send_image/); assert.match(workerRules, /napcat_send_file/)
-  assert.match(workerRules, /省略chat_id/); assert.match(workerRules, /不能把本地路径/)
+  assert.match(workerRules, /省略chat_id/); assert.match(workerRules, /交接本地路径/)
   assert.doesNotMatch(workerRules, /调用 napcat_task_start/)
-  assert.equal(f.b.taskTargetAllowed(childId, f.key), true)
+  assert.equal(f.b.taskTargetAllowed(childId, f.key), false)
   assert.equal(f.b.taskTargetAllowed(childId, 'private:200'), false)
   f.registry.set('grandchild', { session: { header: { parentSession: childId } } })
   f.registry.set('orphan', { session: { header: { parentSession: 'missing' } } })
@@ -344,7 +376,7 @@ test('a running worker loses sending permission when current chat policy is revo
     const f = fixture(kind); let resolve
     f.ctx.subagents = { startActivation: async spec => ({ childId: spec.childId, result: new Promise(r => { resolve = r }) }) }
     const { childId } = await f.b.tasks.start({ parent: f.agent, chatKey: f.key, prompt: [] })
-    assert.equal(f.b.taskTargetAllowed(childId, f.key), true)
+    assert.equal(f.b.taskTargetAllowed(childId, f.key), false)
     f.b.opts.config[kind === 'private' ? 'dmPolicy' : 'groupPolicy'] = 'disabled'
     assert.equal(f.b.taskTargetAllowed(childId, f.key), false)
     resolve({ output: [{ type: 'text', text: 'finished after revocation' }], stopReason: 'completed' }); await tick()

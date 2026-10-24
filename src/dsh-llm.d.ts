@@ -4,6 +4,7 @@ import '@deepseek-ai/dsh-llm'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
+    'plugin:dsh-napcat:task-result': { kind: 'plugin:dsh-napcat:task-result' }
     'plugin:dsh-napcat': { kind: 'plugin:dsh-napcat' }
   }
 }

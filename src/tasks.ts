@@ -1,5 +1,8 @@
 /** In-process task bookkeeping; execution and cancellation stay with the host subagent provider. */
 import { randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { base64UrlToBuffer, safeName } from './media.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -7,6 +10,12 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { sanitizeReply } from './text.js'
 
+export interface TaskMedia {
+  kind: 'image' | 'file'
+  path: string
+  name: string
+  caption?: string
+}
 export interface TaskResult {
   output: ContentBlock[]
   stopReason: string
@@ -24,7 +33,7 @@ export interface TaskStart {
 }
 export interface BackgroundTaskDeps {
   start(input: { parent: Agent; prompt: ContentBlock[]; childId: string; signal: AbortSignal; label?: string }): Promise<TaskReceipt>
-  notify(chatKey: string, text: string): Promise<void>
+  notify(chatKey: string, text: string, parent: Agent, media: TaskMedia[]): Promise<void>
   log?(message: string): void
 }
 type State = 'starting' | 'running' | 'completed' | 'error' | 'interrupted'
@@ -37,8 +46,8 @@ interface Task {
   updated: number
   controller: AbortController
   activation?: Promise<TaskReceipt>
-  textSent: boolean
-  mediaSent: boolean
+  parent: Agent
+  media: TaskMedia[]
   delivered: boolean
   delivery?: Promise<void>
 }
@@ -55,7 +64,7 @@ export class BackgroundTasks {
     const task: Task = {
       id, chatKey: input.chatKey, label: (input.label || '后台任务').replace(/[\r\n]/g, ' ').slice(0, 60),
       state: 'starting', stage: '等待宿主接受', updated: Date.now(),
-      controller: new AbortController(), textSent: false, mediaSent: false, delivered: false,
+      controller: new AbortController(), parent: input.parent, media: [], delivered: false,
     }
     // Install ownership before activation: child tools may run before the receipt arrives.
     this.tasks.set(id, task)
@@ -99,21 +108,28 @@ export class BackgroundTasks {
 
   canSend(sid: string, chatKey: string): boolean | undefined {
     const task = this.tasks.get(sid)
-    return task === undefined ? undefined : !this.stopped && active(task) && task.chatKey === chatKey
+    return task === undefined ? undefined : false
   }
 
-  trackTextSend(sid: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined {
+  /** Only local, validated media bytes reach this callback; workers never send to QQ. */
+  mediaReceiver(sid: string, chatKey: string): ((media: { kind: 'image' | 'file'; url: string; name: string; caption?: string }) => Promise<void>) | undefined {
     const task = this.tasks.get(sid)
-    if (task === undefined || this.canSend(sid, chatKey) !== true) return undefined
-    return async (text, complete = false) => {
-      // Called only after a successful tool send; incomplete multipart sends must not hide the final result.
-      if (complete && text.trim() !== '' && this.canSend(sid, chatKey) === true) task.textSent = true
+    if (!task) return undefined
+    const assertOwned = () => {
+      if (this.stopped || !active(task) || task.chatKey !== chatKey) throw new Error('任务已停止或媒体目标不属于本任务')
     }
-  }
-
-  recordMediaSend(sid: string, chatKey: string): void {
-    const task = this.tasks.get(sid)
-    if (task && this.canSend(sid, chatKey) === true) task.mediaSent = true
+    assertOwned()
+    return async media => {
+      assertOwned()
+      if (!media.url.startsWith('base64://')) throw new Error('任务媒体必须是已验证的本地字节')
+      const dir = join(task.parent.session.header.cwd || process.cwd(), 'napcat-task-results', task.id)
+      await mkdir(dir, { recursive: true })
+      const name = safeName(media.name, media.kind)
+      const path = join(dir, randomUUID() + '-' + name)
+      await writeFile(path, base64UrlToBuffer(media.url), { flag: 'wx' })
+      assertOwned()
+      task.media.push({ kind: media.kind, path, name, ...(media.caption ? { caption: media.caption } : {}) })
+    }
   }
 
   onSessionEvent(session: Pick<Session, 'id'>, event: SessionEvent): void {
@@ -132,7 +148,7 @@ export class BackgroundTasks {
   status(chatKey: string): string {
     const rows = [...this.tasks.values()].filter(task => task.chatKey === chatKey)
     if (rows.length === 0) return '本聊天没有后台任务（仅记录本次运行，不承诺跨重启续跑）。'
-    return rows.map(task => `${task.id} | ${task.label} | ${task.state} | ${task.stage} | 最近事件 ${new Date(task.updated).toISOString()}${task.delivered ? ' | 已回传' : !active(task) ? ' | 未回传' : ''}`).join('\n')
+    return rows.map(task => `${task.id} | ${task.label} | ${task.state} | ${task.stage} | 最近事件 ${new Date(task.updated).toISOString()}${task.delivered ? ' | 已交主会话队列' : !active(task) ? ' | 未回传' : ''}`).join('\n')
   }
 
   private async finish(task: Task, result: TaskResult): Promise<void> {
@@ -141,18 +157,26 @@ export class BackgroundTasks {
     task.stage = task.state === 'completed' ? '任务完成' : task.state === 'interrupted' ? '任务被中断' : '任务未成功结束'
     task.updated = Date.now()
     const text = sanitizeReply(result.output.filter(block => block.type === 'text').map(block => block.text).join('\n'))
-    // Tool-sent successful output already reached this task's bound chat. Errors still need an honest terminal notice.
-    if ((task.textSent || task.mediaSent) && task.state === 'completed') {
-      task.delivered = true
-      return
-    }
-    const message = `后台任务 ${task.id}：${task.stage}${task.state === 'completed' && text ? '\n' + text : ''}`
-    task.delivery = this.deps.notify(task.chatKey, message)
+    const message = `后台任务 ${task.id}（${task.label}）：${task.stage}${task.state === 'completed' && text ? '\n' + text : ''}`
+    task.delivery = this.deps.notify(task.chatKey, message, task.parent, task.state === 'completed' ? [...task.media] : [])
     try {
       await task.delivery
       task.delivered = true
     } catch {
       this.deps.log?.('后台任务结果未回传: ' + task.id)
+    }
+  }
+
+  interruptParent(sid: string): void {
+    for (const task of this.tasks.values()) {
+      if (String(task.parent.session.id) !== sid || !active(task)) continue
+      task.state = 'interrupted'
+      task.stage = '原主会话已停止；结果不再自动回交'
+      task.updated = Date.now()
+      task.controller.abort()
+      void task.activation?.then(receipt => receipt.dispose?.()).catch(() => {
+        this.deps.log?.('后台任务释放失败: ' + task.id)
+      })
     }
   }
 
@@ -179,7 +203,7 @@ export class BackgroundTasks {
 export interface TaskToolDeps {
   tasks: BackgroundTasks
   /** Bridge supplies a per-turn admitted snapshot; worker sessions must resolve to undefined. */
-  resolveContext(exec: unknown): { parent: Agent; chatKey: string; attachments: ContentBlock[] } | undefined
+  resolveContext(exec: unknown): { parent: Agent; chatKey: string; attachments: ContentBlock[]; resultTurn?: boolean } | undefined
 }
 export function registerTaskTools(ctx: Context, deps: TaskToolDeps): void {
   const contextFor = (exec: unknown) => {
@@ -192,7 +216,7 @@ export function registerTaskTools(ctx: Context, deps: TaskToolDeps): void {
   const output = { schema: { type: 'string' as const }, render: (_args: unknown, value: string) => [{ type: 'text' as const, text: value }] }
   ctx.tools.register(defineTool({
     name: 'napcat_task_start',
-    description: '把生图、修图或其他长任务交给独立后台会话。立即返回任务编号，不阻塞本聊天；完成后回原 QQ。附件仅使用本轮已准入快照，不接受任意附件路径。',
+    description: '把生图、修图或其他长任务交给独立后台会话。立即返回任务编号，不阻塞本聊天；完成后交回原主智能体检查并统一回复QQ。附件仅使用本轮已准入快照，不接受任意附件路径。',
     parameters: {
       prompt: { type: 'string', required: true, description: '交给后台执行的完整任务说明' },
       label: { type: 'string', description: '简短任务名称' },
@@ -201,13 +225,14 @@ export function registerTaskTools(ctx: Context, deps: TaskToolDeps): void {
     isConcurrencySafe: () => false,
     execute: async (args, exec) => {
       const context = contextFor(exec)
+      if (context.resultTurn) throw new Error('任务回执轮只能检查并回复结果，不能自动再次派任务')
       const input = args as { prompt: string; label?: string }
       if (!input.prompt.trim()) throw new Error('任务说明不能为空')
       const result = await deps.tasks.start({
         parent: context.parent, chatKey: context.chatKey, label: input.label,
         prompt: [...context.attachments, { type: 'text', text: input.prompt }],
       })
-      return `后台任务已接受：${result.taskId}。无需等待；完成后自动回原 QQ，可继续聊天或查询真实状态。`
+      return `后台任务已接受：${result.taskId}。无需等待；完成后交回原主智能体检查统一回复，可继续聊天或查询真实状态。`
     },
   }))
   ctx.tools.register(defineTool({

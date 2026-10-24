@@ -2,6 +2,12 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session';
+export interface TaskMedia {
+    kind: 'image' | 'file';
+    path: string;
+    name: string;
+    caption?: string;
+}
 export interface TaskResult {
     output: ContentBlock[];
     stopReason: string;
@@ -25,7 +31,7 @@ export interface BackgroundTaskDeps {
         signal: AbortSignal;
         label?: string;
     }): Promise<TaskReceipt>;
-    notify(chatKey: string, text: string): Promise<void>;
+    notify(chatKey: string, text: string, parent: Agent, media: TaskMedia[]): Promise<void>;
     log?(message: string): void;
 }
 export declare class BackgroundTasks {
@@ -39,11 +45,17 @@ export declare class BackgroundTasks {
     }>;
     keyForSession(sid: string): string | undefined;
     canSend(sid: string, chatKey: string): boolean | undefined;
-    trackTextSend(sid: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined;
-    recordMediaSend(sid: string, chatKey: string): void;
+    /** Only local, validated media bytes reach this callback; workers never send to QQ. */
+    mediaReceiver(sid: string, chatKey: string): ((media: {
+        kind: 'image' | 'file';
+        url: string;
+        name: string;
+        caption?: string;
+    }) => Promise<void>) | undefined;
     onSessionEvent(session: Pick<Session, 'id'>, event: SessionEvent): void;
     status(chatKey: string): string;
     private finish;
+    interruptParent(sid: string): void;
     stop(): Promise<void>;
 }
 export interface TaskToolDeps {
@@ -53,6 +65,7 @@ export interface TaskToolDeps {
         parent: Agent;
         chatKey: string;
         attachments: ContentBlock[];
+        resultTurn?: boolean;
     } | undefined;
 }
 export declare function registerTaskTools(ctx: Context, deps: TaskToolDeps): void;

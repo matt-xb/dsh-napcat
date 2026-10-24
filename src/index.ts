@@ -71,7 +71,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     keyForSession: sessionId => bridge.keyForSession(sessionId),
     targetAllowed: (sessionId, chatKey) => bridge.taskTargetAllowed(sessionId, chatKey),
     trackTextSend: (sessionId, chatKey) => bridge.trackTextSend(sessionId, chatKey),
-    recordMediaSend: (sessionId, chatKey) => bridge.recordMediaSend(sessionId, chatKey),
+    taskMediaReceiver: (sessionId, chatKey) => bridge.taskMediaReceiver(sessionId, chatKey),
     get stickerRoot() { return config.stickerRoot },
     recentImages: chatKey => config.memoryEnabled ? bridge.mem.readRecentImages(chatKey) : Promise.resolve([]),
     recordImageSend: async (chatKey, source, name) => {

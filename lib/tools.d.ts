@@ -6,8 +6,12 @@ export interface ToolDeps {
     keyForSession?: (sessionId: string) => string | undefined;
     targetAllowed?: (sessionId: string, chatKey: string) => boolean;
     trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined;
-    /** Successful QQ media delivery, independent of optional image-history persistence. */
-    recordMediaSend?: (sessionId: string, chatKey: string) => void;
+    taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: {
+        kind: 'image' | 'file';
+        url: string;
+        name: string;
+        caption?: string;
+    }) => Promise<void>) | undefined;
     recordImageSend?: (chatKey: string, source: string, name: string) => Promise<void>;
     recentImages?: (chatKey: string) => Promise<string[]>;
     stickerRoot?: string;
