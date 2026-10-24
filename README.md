@@ -33,6 +33,8 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 设置 `stickerRoot` 为本地图库目录，默认空值禁用检索。目录根 `catalog.json` 放公共图；可选 `from-private-<QQ>` / `from-group-<群号>` 子目录只供当前聊天。每条至少包含 `id`、绝对 `path`、文件 `sha256`、`title`/`tags`；建议附 `useWhen`、`avoid`。专属条目还必须 `status: active` 和准确 `allowedChat`。只读直接子文件，拒绝重定向目录、符号链接及校验不符文件。目录和通用文件工具权限不是完整操作系统沙箱。
 
+**语义召回（可选）**：装了 `@xenova/transformers` 时，检索会在词面分之外叠加本地向量相似度（`bge-small-zh-v1.5` 量化模型，约 24MB，走 `https://hf-mirror.com` 下载到 `~/.dsh/cache/stickers`），"郁闷" 也能召回到标着"难受"的图；图库向量算一次就落盘（`stickers-embeddings.json`），之后每次查询只编码这句话，实测冷启动约 200ms、之后约 15ms。没装或加载失败时自动退回纯词面匹配，不影响启动。
+
 部署前备份原插件和配置；运行 `npm ci --ignore-scripts && npm run build && npm test`。升级模块需要宿主重新加载，浏览器刷新不能代替；请在合适时间重载后实际验收“长任务期间继续聊天、修图不串附件、结果只回原聊天、文字只发一次”。离线测试不代表真实模型、QQ、图片质量已通过。主动闲聊的本地 idle 插件是独立部署，本分支不会重复安装或宣称已迁入它。
 
 ## 功能
