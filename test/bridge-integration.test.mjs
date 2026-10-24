@@ -25,6 +25,7 @@ function fixture(kind = 'group') {
   registerTools(ctx, conn, () => {}, {
     keyForSession: id => b.keyForSession(id), trackTextSend: (id, key) => b.trackTextSend(id, key),
     targetAllowed: (id, key) => b.taskTargetAllowed(id, key),
+    recordMediaSend: (id, key) => b.recordMediaSend(id, key),
   })
   const emit = (type, data) => b.onSessionEvent(agent.session, { type, data })
   const start = turn => emit('turn/start', { turn })
@@ -32,6 +33,78 @@ function fixture(kind = 'group') {
   const end = turn => emit('turn/end', { turn, reason: { kind: 'completed' } })
   return { b, ctx, conn, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, exec: { agent } }
 }
+async function startWorker(f) {
+  let resolve
+  const result = new Promise(r => { resolve = r })
+  f.ctx.subagents = { startActivation: async spec => ({ childId: spec.childId, result }) }
+  const { childId } = await f.b.tasks.start({ parent: f.agent, chatKey: f.key, prompt: [] })
+  return { childId, exec: { agent: { session: { id: childId } } }, finish: (stopReason = 'completed') => resolve({ output: [{ type: 'text', text: 'host final result' }], stopReason }) }
+}
+
+test('background image and file tools finish silently after successful segment or upload delivery to the origin', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-media-test-')); t.after(() => rm(dir, { recursive: true, force: true }))
+  const path = join(dir, 'synthetic.png')
+  await writeFile(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jwXkAAAAASUVORK5CYII=', 'base64'))
+  for (const [name, kind, fallback] of [['napcat_send_image', 'group', false], ['napcat_send_file', 'private', false], ['napcat_send_file', 'group', true]]) {
+    const f = fixture(kind), worker = await startWorker(f), call = f.conn.call
+    if (fallback) f.conn.call = (action, params) => action === 'send_msg' ? Promise.reject(Error('segment unsupported')) : call(action, params)
+    await f.tools.get(name).execute(name.endsWith('image') ? { source: path } : { path }, worker.exec)
+    assert.equal(f.sent.length, 1)
+    assert.equal(f.sent[0].params[kind === 'group' ? 'group_id' : 'user_id'], '100')
+    if (fallback) assert.equal(f.sent[0].action, 'upload_group_file')
+    else assert.equal(f.sent[0].params.message[0].type, name.endsWith('image') ? 'image' : 'file')
+    worker.finish(); await tick()
+    assert.equal(f.sent.length, 1, name + ': no automatic summary or task-ID completion message')
+    assert.match(f.b.tasks.status(f.key), /completed.*已回传/)
+  }
+})
+
+test('failed background image and file sends leave the host final result deliverable', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-media-failure-test-')); t.after(() => rm(dir, { recursive: true, force: true }))
+  const path = join(dir, 'synthetic.bin'); await writeFile(path, 'synthetic media')
+  for (const name of ['napcat_send_image', 'napcat_send_file']) {
+    const f = fixture(), worker = await startWorker(f), call = f.conn.call
+    f.conn.call = async () => { throw Error('transport rejected') }
+    await assert.rejects(f.tools.get(name).execute(name.endsWith('image') ? { source: path } : { path }, worker.exec))
+    f.conn.call = call; worker.finish(); await tick()
+    assert.equal(f.sent.length, 1)
+    assert.match(f.sent[0].params.message[0].data.text, /host final result/)
+  }
+})
+
+test('raw background send actions suppress completion only for successful image or file segments', async () => {
+  for (const [action, kind, message, silent] of [
+    ['send_msg', 'group', [{ type: 'image', data: { file: 'base64://synthetic' } }], true],
+    ['send_group_msg', 'group', [{ type: 'file', data: { file: 'base64://synthetic', name: 'synthetic.bin' } }], true],
+    ['send_private_msg', 'private', [{ type: 'text', data: { text: 'caption' } }, { type: 'image', data: { file: 'base64://synthetic' } }], true],
+    ['send_group_msg', 'group', [{ type: 'at', data: { qq: '200' } }], false],
+  ]) {
+    const f = fixture(kind), worker = await startWorker(f)
+    const params = { message, [kind === 'group' ? 'group_id' : 'user_id']: '100' }
+    if (action === 'send_msg') params.message_type = kind
+    await f.tools.get('napcat_api').execute({ action, params_json: JSON.stringify(params) }, worker.exec)
+    worker.finish(); await tick()
+    assert.equal(f.sent.length, silent ? 1 : 2, action + ': media ownership must match actual segments')
+    if (!silent) assert.match(f.sent[1].params.message[0].data.text, /host final result/)
+  }
+  const f = fixture(), worker = await startWorker(f), call = f.conn.call
+  f.conn.call = async () => { throw Error('raw media rejected') }
+  await assert.rejects(f.tools.get('napcat_api').execute({ action: 'send_group_msg', params_json: JSON.stringify({ group_id: '100', message: [{ type: 'image', data: { file: 'base64://synthetic' } }] }) }, worker.exec))
+  f.conn.call = call; worker.finish(); await tick()
+  assert.equal(f.sent.length, 1); assert.match(f.sent[0].params.message[0].data.text, /host final result/)
+})
+
+test('frontend media delivery does not suppress its normal final text', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'napcat-front-media-test-')); t.after(() => rm(dir, { recursive: true, force: true }))
+  const source = join(dir, 'synthetic.png'); await writeFile(source, 'synthetic media')
+  const f = fixture(); f.start(1)
+  await f.tools.get('napcat_send_image').execute({ source }, f.exec)
+  f.message('frontend final result'); f.end(1); await tick()
+  assert.equal(f.sent.length, 2)
+  assert.equal(f.sent[0].params.message[0].type, 'image')
+  assert.equal(f.sent[1].params.message[0].data.text, 'frontend final result')
+})
+
 test('accepted input is persisted before chat creation and current words participate in recall', async () => {
   const f = fixture('private'), sequence = []
   f.b.mem.appendRecent = async (key, row) => { await Promise.resolve(); sequence.push(['append', key, row]) }

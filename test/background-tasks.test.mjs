@@ -88,6 +88,60 @@ test('successful tool text suppresses duplicate final text, but wrong-target and
   assert.deepEqual(sent.map(item => item.key), ['private:2'])
 })
 
+test('successful media suppresses completed task prose and empty completion notices only for its original chat', async () => {
+  const { tasks, runs, sent } = fixture()
+  const a = await tasks.start({ parent, chatKey: 'private:1', prompt })
+  const b = await tasks.start({ parent, chatKey: 'private:2', prompt })
+  const c = await tasks.start({ parent, chatKey: 'private:3', prompt })
+  tasks.recordMediaSend(a.childId, 'private:1')
+  tasks.recordMediaSend(b.childId, 'private:2')
+  tasks.recordMediaSend(c.childId, 'private:1')
+  tasks.recordMediaSend('unregistered-session', 'private:3')
+  runs[0].result.resolve({ output: [{ type: 'text', text: 'redundant media summary' }], stopReason: 'completed' })
+  runs[1].result.resolve({ output: [], stopReason: 'completed' })
+  runs[2].result.resolve({ output: [{ type: 'text', text: 'legitimate text result' }], stopReason: 'completed' })
+  await tick()
+  assert.deepEqual(sent.map(item => item.key), ['private:3'])
+  assert.match(sent[0].text, /legitimate text result/)
+  assert.match(tasks.status('private:1'), /completed.*已回传/)
+  assert.match(tasks.status('private:2'), /completed.*已回传/)
+})
+
+test('media delivery does not suppress error or aborted task notices', async () => {
+  const { tasks, runs, sent } = fixture()
+  for (const stopReason of ['error', 'aborted']) {
+    const { childId } = await tasks.start({ parent, chatKey: 'private:1', prompt })
+    tasks.recordMediaSend(childId, 'private:1')
+    runs.at(-1).result.resolve({ output: [{ type: 'text', text: 'misleading media summary' }], stopReason })
+  }
+  await tick()
+  assert.equal(sent.length, 2)
+  assert.match(sent[0].text, /任务未成功结束/)
+  assert.match(sent[1].text, /任务被中断/)
+  assert.ok(sent.every(item => !item.text.includes('misleading media summary')))
+})
+
+test('late media acknowledgement cannot affect another task and stopped tasks ignore media', async () => {
+  const { tasks, runs, sent } = fixture()
+  const first = await tasks.start({ parent, chatKey: 'private:1', prompt })
+  runs[0].result.resolve({ output: [{ type: 'text', text: 'first text result' }], stopReason: 'completed' })
+  await tick()
+  const second = await tasks.start({ parent, chatKey: 'private:1', prompt })
+  tasks.recordMediaSend(first.childId, 'private:1')
+  runs[1].result.resolve({ output: [{ type: 'text', text: 'second text result' }], stopReason: 'completed' })
+  await tick()
+  assert.equal(sent.length, 2)
+  assert.match(sent[1].text, /second text result/)
+  assert.equal(tasks.canSend(second.childId, 'private:1'), false)
+  const stopped = await tasks.start({ parent, chatKey: 'private:1', prompt })
+  await tasks.stop()
+  tasks.recordMediaSend(stopped.childId, 'private:1')
+  runs[2].result.resolve({ output: [], stopReason: 'completed' })
+  await tick()
+  assert.equal(sent.length, 2)
+  assert.match(tasks.status('private:1'), /interrupted.*未回传/)
+})
+
 test('non-success stop reasons and rejection are not reported as completed', async () => {
   const { tasks, runs, sent } = fixture()
   for (const stopReason of ['max-tokens', 'aborted', 'error']) {

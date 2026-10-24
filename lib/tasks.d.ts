@@ -40,6 +40,7 @@ export declare class BackgroundTasks {
     keyForSession(sid: string): string | undefined;
     canSend(sid: string, chatKey: string): boolean | undefined;
     trackTextSend(sid: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined;
+    recordMediaSend(sid: string, chatKey: string): void;
     onSessionEvent(session: Pick<Session, 'id'>, event: SessionEvent): void;
     status(chatKey: string): string;
     private finish;

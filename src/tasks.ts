@@ -38,6 +38,7 @@ interface Task {
   controller: AbortController
   activation?: Promise<TaskReceipt>
   textSent: boolean
+  mediaSent: boolean
   delivered: boolean
   delivery?: Promise<void>
 }
@@ -54,7 +55,7 @@ export class BackgroundTasks {
     const task: Task = {
       id, chatKey: input.chatKey, label: (input.label || '后台任务').replace(/[\r\n]/g, ' ').slice(0, 60),
       state: 'starting', stage: '等待宿主接受', updated: Date.now(),
-      controller: new AbortController(), textSent: false, delivered: false,
+      controller: new AbortController(), textSent: false, mediaSent: false, delivered: false,
     }
     // Install ownership before activation: child tools may run before the receipt arrives.
     this.tasks.set(id, task)
@@ -110,6 +111,11 @@ export class BackgroundTasks {
     }
   }
 
+  recordMediaSend(sid: string, chatKey: string): void {
+    const task = this.tasks.get(sid)
+    if (task && this.canSend(sid, chatKey) === true) task.mediaSent = true
+  }
+
   onSessionEvent(session: Pick<Session, 'id'>, event: SessionEvent): void {
     const task = this.tasks.get(String(session.id))
     if (task === undefined || !active(task) || this.stopped) return
@@ -136,7 +142,7 @@ export class BackgroundTasks {
     task.updated = Date.now()
     const text = sanitizeReply(result.output.filter(block => block.type === 'text').map(block => block.text).join('\n'))
     // Tool-sent successful output already reached this task's bound chat. Errors still need an honest terminal notice.
-    if (task.textSent && task.state === 'completed') {
+    if ((task.textSent || task.mediaSent) && task.state === 'completed') {
       task.delivered = true
       return
     }

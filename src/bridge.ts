@@ -53,7 +53,7 @@ const TASK_REPLY_RULES = `【长任务与聊天分流】
 const TASK_WORKER_RULES = `【独立QQ后台任务】
 执行本次任务，不等待前台聊天，不再创建后台任务。只使用本次交接的要求与附件，不读其他聊天、私人知识库或凭据补上下文。
 普通最终文本由桥自动回传原聊天。生成或修改的图片、文件必须分别调用 napcat_send_image、napcat_send_file 实际发送，省略chat_id，不能把本地路径、Markdown链接或present卡片当成QQ已收到。
-同一任务只回原聊天，不联系其他人；发送失败如实说明，不能声称已送达。完整文字已用QQ工具成功发送后不要再复制结果。`
+同一任务只回原聊天，不联系其他人；发送失败如实说明，不能声称已送达。图片或文件成功发送后直接结束，不补完成说明、任务编号、图片描述或客套话；桥也不再追加成功文字。完整文字已用QQ工具成功发送后不要再复制结果。`
 
 interface ChatState {
   ref: ChatRef
@@ -724,6 +724,10 @@ export class Bridge {
       if (!agent) return false
     }
     return true
+  }
+
+  recordMediaSend(sessionId: string, chatKey: string): void {
+    this.tasks.recordMediaSend(sessionId, chatKey)
   }
 
   trackTextSend(sessionId: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined {
