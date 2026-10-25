@@ -245,7 +245,7 @@ for (const kind of ['private', 'group']) {
       { type: 'text', text: '还在跑 那个更新面板交给后台了' },
       { type: 'tool-call', id: 'synthetic-dropped', name: 'compress', arguments: '{}' },
     ] })
-    f.end(1); await tick()
+    f.end(1); f.end(1); await tick()
     assert.equal(f.sent.length, 0); assert.equal(f.memory.length, 0)
     const warnings = logs.filter(entry => entry.level === 'warn' && entry.message.includes('正文未发出'))
     assert.equal(warnings.length, 1)
