@@ -10,7 +10,7 @@ import { join } from 'node:path'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 function fixture(kind = 'group') {
-  const sent = [], memory = [], registry = new Map(), tools = new Map(), queued = [], listeners = new Map()
+  const sent = [], memory = [], registry = new Map(), tools = new Map(), queued = [], listeners = new Map(), disposed = []
   const agent = { session: { id: 'front', header: { cwd: process.cwd() } }, followup(message) { queued.push(message) } }
   registry.set('front', agent)
   const ctx = { agents: { get: id => registry.get(id) }, tools: { register: t => tools.set(t.name, t) }, on(name, cb) { listeners.set(name, cb); return () => listeners.delete(name) } }
@@ -19,7 +19,7 @@ function fixture(kind = 'group') {
   b.mem.appendRecent = async (...args) => memory.push(args)
   b.debugLog = () => {}
   const key = kind + ':100'
-  const chat = { ref: { kind, id: '100', key }, buffer: [], lastReplyId: '', fresh: true, titleSet: true, agent }
+  const chat = { ref: { kind, id: '100', key }, buffer: [], lastReplyId: '', fresh: true, titleSet: true, agent, dispose: async () => { disposed.push('front') } }
   b.chats.set(key, chat); b.bySession.set('front', key)
   b.start()
   registerTools(ctx, conn, () => {}, {
@@ -31,7 +31,7 @@ function fixture(kind = 'group') {
   const start = turn => emit('turn/start', { turn })
   const message = (text, turn = 1, extra = {}, step = 1) => emit('assistant/message', { turn, step, message: { role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text }], ...extra } })
   const end = turn => emit('turn/end', { turn, reason: { kind: 'completed' } })
-  return { b, ctx, conn, queued, listeners, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, exec: { agent } }
+  return { b, ctx, conn, queued, listeners, sent, memory, tools, registry, agent, chat, key, emit, start, message, end, disposed, exec: { agent } }
 }
 async function startWorker(f) {
   let resolve
@@ -427,4 +427,23 @@ test('wire rejects internal context before transmission and accepts a valid succ
   assert.equal(sent.length, 0)
   await conn.call('send_msg', { message_type: 'group', group_id: '100', message: '普通文本' })
   assert.equal(sent.length, 1); assert.equal(conn.pending.size, 0)
+})
+
+test('a blocked turn from an archived session rebuilds the chat instead of staying silent', async () => {
+  const f = fixture()
+  f.ctx.workspaceRegistry = { archivedSessionIds: ['front'] }
+  f.start(1)
+  f.emit('turn/end', { turn: 1, reason: { kind: 'blocked' } })
+  await tick(); await tick()
+  assert.equal(f.b.chats.has(f.key), false)
+  assert.deepEqual(f.disposed, ['front'])
+})
+
+test('an archived cached session is dropped so the next message opens a fresh one', async () => {
+  const f = fixture()
+  f.ctx.workspaceRegistry = { archivedSessionIds: ['front'] }
+  const failure = await f.b.ensureChat({ kind: 'group', id: '100', key: f.key }).catch(error => error)
+  assert.ok(failure instanceof Error)
+  assert.equal(f.b.chats.has(f.key), false)
+  assert.deepEqual(f.disposed, ['front'])
 })
