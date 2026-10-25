@@ -30,6 +30,16 @@
 - 只读比较入口：`https://github.com/matt-xb/dsh-napcat/compare/main...wzwei1990:main`。独立桌面插件管理面板只展示分支版本及上游待评估提交，不自动安装市场中的同名原版，也不自动合并代码。
 - GitHub 查询失败或限流时保留保护状态并提示重试，不显示为“已是最新”。本次仅补充来源约定与外部面板，不修改 NapCat 运行逻辑或宣称已升级正式安装。
 
+## 修复：插件自带 sharp 抢宿主 libvips（0.3.23-xb.8，2026-10-25）
+
+- 现象：QQ 群聊连续回「⚠️ 本轮回复失败，请稍后再试」，私聊正常；每轮 turn 只跑 ~386ms、模型零输出。
+- 根因：插件导入 `@xenova/transformers` 时，它顶层 `import sharp` 加载自带 sharp 0.32.6（libvips 8.14.5）；宿主 `@deepseek-ai/dsh-attachment-local` 懒加载自己的 sharp 0.35.5（libvips 8.18.7）。同名 DLL `libvips-42.dll` 已被前者占用，宿主 `requireSharp()` 抛 `ERR_DLOPEN_FAILED: The specified procedure could not be found.`（`...@img\sharp-win32-x64\lib\sharp-win32-x64-0.35.5.node`），附件准入失败 → 整轮 error → 桥发通用失败提示。只有本轮请求要读图片附件时才触发，故私聊纯文本不受影响。
+- 触发点不是图片：任何一次 `napcat_find_sticker`（`lib/semantic.js` → `import('@xenova/transformers')`）就足以毒化进程；图片附件只是让宿主 sharp 真正被调用的契机。
+- 修复：`lib/semantic.js` 新增 `stubSharp()`，在 `import('@xenova/transformers')` 之前把插件解析到的 `sharp` 写入 `require.cache`（导出抛错 stub）。transformers 只用于文本 embedding，从不调用 sharp 图像 API。
+- 源码与构建：`src/` 无 `semantic.ts`（该文件历来只有编译产物入库），直接改 `lib/semantic.js`，不用全量 tsc。
+- 验证：`test/semantic-sharp-guard.test.mjs`（无守卫时 FAIL，加守卫后 PASS）；完整离线回归 102/102；在插件安装目录实跑 `semanticScores` 命中 `a|3:0.544`（约 150ms）且随后宿主的 sharp addon 仍 `LOADED`。
+- 交付：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.8.tgz`；`profile package.json` 指向 xb.8；`lib/semantic.js` 与 tarball 逐字节一致（sha256 `4dae713c…`）。**未重启 DSH，也未重载插件**，运行中的进程 34052 仍是旧的（被毒化）状态，需用户重载/重启后群聊才恢复。
+
 ## 已有构建不一致（本次未扩大修复）
 
 本次开始时工作树干净，但基线 `src/stickers.ts` / `src/text.ts` 与已提交的 `lib/stickers.js` / `lib/text.js` 不一致。全量 tsc 会覆盖现有已上线表情匹配/文本过滤逻辑；本次构建后恢复这两个无关 lib 文件到原提交，避免功能退回，再跑完整测试。后续开发不可把这两文件的构建退回夹入无关提交；应单独对齐源码与既有编译功能。本次未修改两文件的源码或已提交构建逻辑。
