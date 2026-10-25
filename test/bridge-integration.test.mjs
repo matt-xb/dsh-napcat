@@ -447,3 +447,11 @@ test('an archived cached session is dropped so the next message opens a fresh on
   assert.equal(f.b.chats.has(f.key), false)
   assert.deepEqual(f.disposed, ['front'])
 })
+
+test('a cached session that is not archived is reused as before', async () => {
+  const f = fixture()
+  f.ctx.workspaceRegistry = { archivedSessionIds: ['other'] }
+  assert.equal(await f.b.ensureChat({ kind: 'group', id: '100', key: f.key }), f.chat)
+  assert.equal(f.b.chats.get(f.key), f.chat)
+  assert.deepEqual(f.disposed, [])
+})
