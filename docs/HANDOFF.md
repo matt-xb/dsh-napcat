@@ -48,6 +48,16 @@
 - 验证：从 asar 抽出真实主题 CSS（`--dsw-alias-*` 亮/暗两套），用 `vm` 还原 `style` 对象渲染前后对比页；改前暗色三框全白、改后 `#232324` 底 + `#f9fafb` 字；亮色主题下黑色主按钮 + 白字照常。`node --check` 通过，完整离线回归 102/102。
 - 交付：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.9.tgz`；`profile package.json` 指向 xb.9。前端改动需刷新页面或重载插件后生效，**本次未重启 DSH、未重载插件**，实机设置页尚未验收。
 
+## 修复：模型把宿主 runtime context 复述进正文并发到群里（0.3.23-xb.10，2026-10-25）
+
+- 现象：群聊一条正常回复末尾多出三行 `Time sampled while preparing turn 78, step 1: …` / `Browser time zone for this request: …` / `Elapsed since the preceding model-visible message: 10m 0s.`，原样发到了 QQ 群。
+- 根因：不是桥拼装/转发带出来的。受害群会话的 `session.v4.jsonl.zstd` 里那条 `assistant/message` 事件（`turn:78, step:1`）中，`content[].type === 'text'` 的正文本身就把这段注入复述了进去（模型 `deepseek-v4.1-flash`，provider workbuddy）。真实注入是宿主 `@deepseek-ai/dsh-time-context` 每轮单独插入的 `user/message`（`source.kind: "time-context"`），模型把这文本抄进了答复。
+- 为什么没拦住：`sanitizeReply` 原先只按「整段都是内部上下文」判定（命中即 `null` 丢弃），没有任何 runtime context 行的规则，所以和正文混在一起时原样放行。全量 477 个会话扫描另有 3 处同类（1 处群聊时间戳、2 处 `这个会话来自 QQ…` + `【本聊天历史与明确事实】`、1 处 `【本地自动触发，不是用户发言】`），都属「注入混进正文」这一洞。
+- 修复：只在共享出口 `sanitizeReply` 里加 `stripRuntimeContext`（`src/text.ts` / `lib/text.js`），桥的自动回复、`napcat_send_message`、原始 OneBot 发送、任务回传、目标群/私聊全部共用。规则：以 `Time sampled while preparing turn \d+, step \d+:` 打头，且紧跟着还有别的标记行（`Browser time zone for this request:` / `Elapsed since the preceding (model-visible message|step context):`）才算注入，整块连块内空行一起删，其余正文一字不动；孤立一句（群里问「这是啥」）不删。剥完为空则沿用既有 `空消息不外发`，不会发空消息。
+- 验证：`test/migration-text-memory.test.mjs` 新增一例（夹在中间 / 段首 / 整段都在 / 正常聊天提到同字样不删）；`npm run typecheck` 通过，完整离线回归 103/103（零跳过）。
+- 交付：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.10.tgz`；`profile package.json` 指向 xb.10，安装目录 `lib/text.js` 与 tarball 逐字节一致。**未重启 DSH、未重载插件**，运行中进程仍是旧的，需重载后群聊才生效。
+- 已知局限：只认这三类英文标记行，宿主以后换措辞要同步加规则；模型把注入改写成中文转述时无法识别。
+
 ## 已有构建不一致（本次未扩大修复）
 
 本次开始时工作树干净，但基线 `src/stickers.ts` / `src/text.ts` 与已提交的 `lib/stickers.js` / `lib/text.js` 不一致。全量 tsc 会覆盖现有已上线表情匹配/文本过滤逻辑；本次构建后恢复这两个无关 lib 文件到原提交，避免功能退回，再跑完整测试。后续开发不可把这两文件的构建退回夹入无关提交；应单独对齐源码与既有编译功能。本次未修改两文件的源码或已提交构建逻辑。

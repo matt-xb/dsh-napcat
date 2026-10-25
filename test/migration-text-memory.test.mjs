@@ -30,6 +30,24 @@ test('short Chinese punctuation dedup preserves questions, numbers and code', ()
   assert.deepEqual(sanitizeOutgoingMessage([{ type: 'text', data: { text: '？' } }]), [{ type: 'text', data: { text: '？' } }])
 })
 
+test('runtime time-context quoted by the model is stripped, real prose untouched', () => {
+  const injected = 'Time sampled while preparing turn 78, step 1: 2026-10-25T14:52:55+08:00[Asia/Singapore]\n'
+    + 'Browser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.\n'
+    + 'Elapsed since the preceding model-visible message: 10m 0s.'
+  // 夹在中间：只掉这几行，前后正文一字不动。
+  assert.equal(sanitizeReply('正常就是啥也没有，只能图个稳\n\n' + injected), '正常就是啥也没有，只能图个稳')
+  assert.equal(sanitizeReply(injected + '\n后面这句要留着'), '后面这句要留着')
+  assert.equal(sanitizeReply('A\n' + injected.replace('10m 0s.', '10m 1s.').replace('model-visible message', 'step context') + '\nB'), 'A\nB')
+  // 整段都在：清空后不发空消息。
+  assert.equal(sanitizeReply(injected), '')
+  assert.throws(() => sanitizeOutgoingMessage(injected), /空消息/)
+  // 正常内容里提到类似字样：不当注入删。
+  const chat = '群友问 Browser time zone for this request: 是啥，我说那是系统提示'
+  assert.equal(sanitizeReply(chat), chat)
+  assert.equal(sanitizeReply('Time sampled while preparing turn 78, step 1: 这句是报错原文吗'), 'Time sampled while preparing turn 78, step 1: 这句是报错原文吗')
+  assert.equal(sanitizeReply('Elapsed since the preceding model-visible message: 这是我编的句子'), 'Elapsed since the preceding model-visible message: 这是我编的句子')
+})
+
 test('recent image memory preserves concurrent deliveries and isolates chat/role', async () => {
   const root = await mkdtemp(join(tmpdir(), 'napcat-memory-'))
   try {
