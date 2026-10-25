@@ -88,17 +88,22 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         input: {
           font: 'inherit', fontSize: '13px', padding: '7px 9px', borderRadius: '6px',
           border: '1px solid var(--dsw-alias-border-l2, #d0d0d0)',
-          background: 'var(--dsw-alias-bg-l1, #fff)', color: 'inherit', width: '100%', boxSizing: 'border-box',
+          // 宿主主题变量表里没有 --dsw-alias-bg-l1（写错会退到 #fff，暗色主题下白底白字看不见），
+          // 用宿主输入框同一套 token：bg-layer-1 + label-primary。
+          background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, inherit)',
+          width: '100%', boxSizing: 'border-box',
         },
         checkRow: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' },
         bar: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
         btn: {
           font: 'inherit', fontSize: '13px', padding: '7px 14px', borderRadius: '6px', cursor: 'pointer',
-          border: '1px solid var(--dsw-alias-border-l2, #d0d0d0)', background: 'transparent', color: 'inherit',
+          border: '1px solid var(--dsw-alias-border-l2, #d0d0d0)', background: 'transparent', color: 'var(--dsw-alias-label-primary, inherit)',
         },
         primary: {
           font: 'inherit', fontSize: '13px', padding: '7px 14px', borderRadius: '6px', cursor: 'pointer',
-          border: '1px solid transparent', background: 'var(--dsw-alias-state-business-primary, #1677ff)', color: '#fff',
+          border: '1px solid transparent',
+          // 主按钮跟宿主同一对 token：暗色主题下 business-primary 是浅蓝，配写死的 #fff 几乎看不清。
+          background: 'var(--dsw-alias-button-primary-fill, #1677ff)', color: 'var(--dsw-alias-label-primary-foreground, #fff)',
         },
         error: { color: 'var(--dsw-alias-state-error-primary, #d4380d)', fontSize: '12px', margin: 0, whiteSpace: 'pre-wrap' },
         ok: { color: 'var(--dsw-alias-state-success-primary, #389e0d)', fontSize: '12px', margin: 0 },

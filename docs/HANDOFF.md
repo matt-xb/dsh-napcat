@@ -40,6 +40,14 @@
 - 验证：`test/semantic-sharp-guard.test.mjs`（无守卫时 FAIL，加守卫后 PASS）；完整离线回归 102/102；在插件安装目录实跑 `semanticScores` 命中 `a|3:0.544`（约 150ms）且随后宿主的 sharp addon 仍 `LOADED`。
 - 交付：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.8.tgz`；`profile package.json` 指向 xb.8；`lib/semantic.js` 与 tarball 逐字节一致（sha256 `4dae713c…`）。**未重启 DSH，也未重载插件**，运行中的进程 34052 仍是旧的（被毒化）状态，需用户重载/重启后群聊才恢复。
 
+## 修复：设置页在暗色主题下看不见（0.3.23-xb.9，2026-10-25）
+
+- 现象：DSH 设置 → NapCat 页面在深色主题下，输入框/下拉框是白底白字，几乎读不出内容。
+- 根因：`client/index.js` 的 `style.input` 用 `background: var(--dsw-alias-bg-l1, #fff)`，而宿主主题表里**没有** `--dsw-alias-bg-l1`（全 asar 定义数 0，只有一处误引用），fallback `#fff` 生效；同时 `color: 'inherit'` 不跟主题。主按钮则相反，用 `business-primary` 当填充但文字写死 `#fff`，暗色下 business-primary 是浅蓝 `#7aaaff`，白字几乎看不清。
+- 修复：输入框改用宿主输入框同一套 token `--dsw-alias-bg-layer-1` + `--dsw-alias-label-primary`；`style.btn` 文字色改 `--dsw-alias-label-primary`；`style.primary` 改宿主主按钮那一对 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-foreground`。全部保留原有 fallback 值。
+- 验证：从 asar 抽出真实主题 CSS（`--dsw-alias-*` 亮/暗两套），用 `vm` 还原 `style` 对象渲染前后对比页；改前暗色三框全白、改后 `#232324` 底 + `#f9fafb` 字；亮色主题下黑色主按钮 + 白字照常。`node --check` 通过，完整离线回归 102/102。
+- 交付：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.9.tgz`；`profile package.json` 指向 xb.9。前端改动需刷新页面或重载插件后生效，**本次未重启 DSH、未重载插件**，实机设置页尚未验收。
+
 ## 已有构建不一致（本次未扩大修复）
 
 本次开始时工作树干净，但基线 `src/stickers.ts` / `src/text.ts` 与已提交的 `lib/stickers.js` / `lib/text.js` 不一致。全量 tsc 会覆盖现有已上线表情匹配/文本过滤逻辑；本次构建后恢复这两个无关 lib 文件到原提交，避免功能退回，再跑完整测试。后续开发不可把这两文件的构建退回夹入无关提交；应单独对齐源码与既有编译功能。本次未修改两文件的源码或已提交构建逻辑。
