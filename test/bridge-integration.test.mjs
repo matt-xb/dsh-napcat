@@ -237,6 +237,34 @@ test('tool-step filtering does not change successful explicit text delivery owne
   assert.equal(f.sent.length, 1); assert.equal(f.sent[0].params.message[0].data.text, 'delivered response')
 })
 
+for (const kind of ['private', 'group']) {
+  test(kind + ': dropped tool-step narration warns once and is never auto-sent', async () => {
+    const f = fixture(kind), logs = []; f.start(1)
+    f.b.opts.log = (level, message) => logs.push({ level, message })
+    f.message('', 1, { content: [
+      { type: 'text', text: '还在跑 那个更新面板交给后台了' },
+      { type: 'tool-call', id: 'synthetic-dropped', name: 'compress', arguments: '{}' },
+    ] })
+    f.end(1); await tick()
+    assert.equal(f.sent.length, 0); assert.equal(f.memory.length, 0)
+    const warnings = logs.filter(entry => entry.level === 'warn' && entry.message.includes('正文未发出'))
+    assert.equal(warnings.length, 1)
+    assert.ok(warnings[0].message.includes(f.key) && warnings[0].message.includes('turn=1'))
+    assert.ok(warnings[0].message.includes('还在跑 那个更新面板交给后台了'))
+  })
+}
+
+test('silent sentinel and error turns never raise the dropped-text warning', async () => {
+  const f = fixture(), logs = []; f.b.opts.log = (level, message) => logs.push({ level, message })
+  const dropped = () => logs.filter(entry => entry.message.includes('正文未发出')).length
+  f.start(1); f.message('[[NAPCAT_SILENT]]'); f.end(1); await tick()
+  assert.equal(f.sent.length, 0); assert.equal(dropped(), 0)
+  f.start(2); f.emit('turn/end', { turn: 2, reason: { kind: 'error', error: { message: 'private diagnostic' } } }); await tick()
+  assert.equal(f.sent.length, 1); assert.equal(dropped(), 0)
+  f.start(3); f.message('这轮是正常回复', 3); f.end(3); await tick()
+  assert.equal(f.sent.length, 2); assert.equal(dropped(), 0)
+})
+
 test('only the latest committed candidate is sent, without fuzzy text comparisons', async () => {
   const f = fixture(); f.start(1); f.message('earlier draft? 🙂')
   const text = 'Final? Yes! 🙂 ' + 'long synthetic answer '.repeat(8)
