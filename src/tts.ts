@@ -114,7 +114,7 @@ async function synthesizeAttempt(
     voice: String(config.ttsVoiceRef ?? ''),
     lang: 'ZH',
     emo,
-    alpha: '0.6',
+    alpha: '0.45',
     speed: String(config.ttsSpeed ?? 1.0),
   })
   const timeoutMs = Number(config.ttsTimeoutMs ?? 30000)

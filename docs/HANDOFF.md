@@ -115,3 +115,25 @@
 - 发布包：`D:\NapCat\releases\dsh-napcat-0.3.23-xb.14.tgz`。
 - **未重启 DSH**，需要重载插件才生效。
 - 人工验收：①停掉 TTS（`Stop-Process` 掉 9880 的 python 或结束计划任务拉起的进程）→ 在 QQ 里让机器人发一条语音 → 首条可能慢 40 秒左右但应成功发出，`D:\NapCat\tts\logs\tts_server.out` 出现新的启动日志；②把 `NAPCAT_TTS_PYTHON` 指到一个不存在的路径再重载 → 发语音应立刻回到「TTS 服务不可用」提示，插件本身不报错、其他功能正常；③设置页能看到「TTS 服务没起时自动拉起」开关。
+
+## 修复：音色定型（0.3.23-xb.15，2026-10-26）
+
+**背景**：音色在服务端已定型（`DEFAULT_VOICE = refs/user/user_ref_dereverb_g4.wav`，即去混响的 g4 参考），插件侧默认值仍指向旧的 `u3.wav`，且 `alpha` 硬编码 0.6，导致插件发出的合成请求与新音色不匹配。
+
+**改动（仅插件侧，服务端未再变动）**：
+
+- `src/config.ts`：`ttsVoiceRef` 默认值 `D:/NapCat/tts/refs/user/u3.wav` → `D:/NapCat/tts/refs/user/user_ref_dereverb_g4.wav`（zod schema `default` 与 `DEFAULTS` 两处同步）。
+- `src/tts.ts`：请求参数 `alpha: '0.6'` → `'0.45'`（音色相似度权重下调，贴近定型音色）；emo 八维向量保持不变，由服务端兜底，不新增配置项。
+- 服务端对旧路径 `u3.wav` / `user_ref_new.wav` 做了自动映射（映射到 g4 并强制 `emo=[0,0,0,0,0,0.5,0,0.5]`、`alpha=0.45`），因此**插件未重载、旧配置仍在用旧路径时也能直接生效**。
+- FORMANT 后处理（默认 1.07，音高不变、声道收窄）完全由服务端负责，插件不再做任何音色/音高处理。
+
+**版本**：`package.json` → `0.3.23-xb.15`；`README.md` 版本行同步。
+
+**验证**：`npm run build` 通过；`npm test` → **109 tests, 109 pass, 0 fail**（与 xb.14 基线一致，本次未新增用例）。
+
+**部署与验收（0.3.23-xb.15）**：
+
+- 运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\`：`lib/config.js`、`lib/config.d.ts`、`lib/tts.js`、`lib/tts.d.ts`、`package.json` 逐个覆盖并 sha256 与源码仓库核对一致。
+- 发布包：`D:\NapCat\releases\dsh-napcat-0.3.23-xb.15.tgz`（解压后 `lib` 与安装目录 sha256 一致）。
+- **未重启 DSH**，需重载插件后插件侧默认值才生效；服务端映射可保证重载前的旧路径请求也已使用新音色。
+- 人工验收：让机器人发一条语音，确认音色为去混响的 g4、无旧 u3 的混响尾音；`tts_server.py` 未改动、未重启。
