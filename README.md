@@ -13,7 +13,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 自己维护的一份实现：功能按需长，结构保持薄（连接层 / 会话桥 / 工具 / 配置四块，互不缠绕）。
 
-**当前分支版本 v0.3.23-xb.10（预发布，实机验收待完成）**。
+**当前分支版本 v0.3.23-xb.12（预发布，实机验收待完成）**。
 
 普通闲聊默认一句短话，不展开分析接话意图；自动回复的短中文纯文本会合并换行。代码、列表、链接和长正文不做此压行处理，后台任务结果及显式文字工具不改写。短句要求由模型生成，不靠截断正文实现；实际效果需重载后的QQ聊天验收。
 
@@ -334,6 +334,8 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `napcat_list_targets` | 列好友与群，确定 `chat_id` |
 | `napcat_send_image` | 发图片（本地路径或 URL；自动 base64） |
 | `napcat_send_file` | 发文件（`file` 段 → 退回 `upload_*_file`） |
+| `napcat_send_voice` | 发语音（本机 TTS 合成后发 `record` 段；可传 `emotion`） |
+| `napcat_sing` | 唱歌（三行简谱 → 离线歌声合成 → 音色转换 → 发 `record` 段；整链独占显存） |
 | `napcat_list_group_files` | 列群文件（`get_group_root_files` / `get_group_files_by_folder`，可按关键字过滤） |
 | `napcat_fetch_group_file` | 下载群文件（**模糊文件名**；多个同分返回候选清单） |
 | `napcat_memory_space` | 把本群 mnemon 记忆空间 id 登记给插件（插件缓存后自动带入上下文） |

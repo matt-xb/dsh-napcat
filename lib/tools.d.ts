@@ -21,5 +21,7 @@ export interface ToolDeps {
     allowedGroups?: () => readonly string[];
     /** 把 chatKey → mnemon 空间 id 写进插件缓存 */
     rememberSpace?: (chatKey: string, spaceId: string) => Promise<void>;
+    /** 当前解析后的插件配置（发语音/唱歌读 tts* / sing* 字段） */
+    getConfig?: () => Record<string, unknown>;
 }
 export declare function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void, deps?: ToolDeps): void;

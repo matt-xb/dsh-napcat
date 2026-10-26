@@ -76,6 +76,19 @@ export interface Config {
     warmupStaleMinutes: number;
     warmupImages: boolean;
     warmupImageLimit: number;
+    voiceToText: boolean;
+    voiceWhisperBin: string;
+    voiceWhisperModel: string;
+    voiceLanguage: string;
+    voiceTimeoutMs: number;
+    ttsEnabled: boolean;
+    ttsServerUrl: string;
+    ttsVoiceRef: string;
+    ttsSpeed: number;
+    ttsEmotion: string;
+    ttsTimeoutMs: number;
+    singEnabled: boolean;
+    singTimeoutMs: number;
 }
 export declare const Config: Z<Config>;
 /** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */
