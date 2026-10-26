@@ -90,6 +90,8 @@ export interface Config {
   ttsSpeed: number
   ttsEmotion: string
   ttsTimeoutMs: number
+  /** TTS 服务没起时自动拉起（默认开）。 */
+  ttsAutoStart: boolean
   singEnabled: boolean
   singTimeoutMs: number
 }
@@ -181,6 +183,7 @@ export const Config: Z<Config> = z.object({
   ttsSpeed: z.number().default(1.0).description('语速（1=原速，越大越快）').volatile(),
   ttsEmotion: z.string().default('calm').description('默认情绪：happy/angry/sad/afraid/disgusted/melancholic/surprised/calm').volatile(),
   ttsTimeoutMs: z.natural().default(30000).description('单条语音合成超时（毫秒）').volatile(),
+  ttsAutoStart: z.boolean().default(true).description('TTS 服务没起时自动拉起（本机才生效；启动器路径可用 NAPCAT_TTS_PYTHON / NAPCAT_TTS_SERVER 覆盖）').volatile(),
   singEnabled: z.boolean().default(true).description('唱歌：开启 napcat_sing（本机歌声合成 + 音色转换）').volatile(),
   singTimeoutMs: z.natural().default(300000).description('整条唱歌链路超时（毫秒，含合成与音色转换）').volatile(),
 }) as unknown as Z<Config>
@@ -248,6 +251,7 @@ export const DEFAULTS: Config = {
   ttsSpeed: 1.0,
   ttsEmotion: 'calm',
   ttsTimeoutMs: 30000,
+  ttsAutoStart: true,
   singEnabled: true,
   singTimeoutMs: 300000,
 }

@@ -87,6 +87,8 @@ export interface Config {
     ttsSpeed: number;
     ttsEmotion: string;
     ttsTimeoutMs: number;
+    /** TTS 服务没起时自动拉起（默认开）。 */
+    ttsAutoStart: boolean;
     singEnabled: boolean;
     singTimeoutMs: number;
 }

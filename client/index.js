@@ -76,6 +76,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'ttsSpeed', label: '语速（1=原速，默认 1.15）', kind: 'number' },
         { key: 'ttsEmotion', label: '默认情绪（calm/happy/angry/sad/afraid/disgusted/melancholic/surprised）', kind: 'text' },
         { key: 'ttsTimeoutMs', label: '单条语音合成超时（毫秒，默认 30000）', kind: 'number' },
+        { key: 'ttsAutoStart', label: 'TTS 服务没起时自动拉起（默认开）', kind: 'boolean' },
         { key: 'singEnabled', label: '唱歌：开启（简谱 → 歌声合成 → 音色转换 → 发语音）', kind: 'boolean' },
         { key: 'singTimeoutMs', label: '整条唱歌链路超时（毫秒，默认 300000）', kind: 'number' },
         { key: 'proactiveEnabled', label: '主动发言（伪人模式）：群里有话题时自己插话', kind: 'boolean' },

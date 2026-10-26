@@ -86,3 +86,32 @@
 - 安装：`D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\`，profile `package.json` 第 10 行仍走 `github:matt-xb/dsh-napcat`；本次需重载插件（或重启宿主）才生效，**未擅自重启**。
 - 需人工验收：①归档一个 QQ 会话后再发消息应能正常回复（不再静默）；②发图/语音后不应再跟一句「已发图」；③群里不应再出现 `![](D:\…)`/`</output>`；④生图应走 `image_generate`。
 - 已知局限：若宿主接了 followup 却既不产生 turn/start 也不发任何 session 事件，插件只能重投一次后提示「会话没有响应」；这是兜底而不是根治宿主侧卡死。
+
+## 修复：TTS 服务自愈启动（0.3.23-xb.14，2026-10-26）
+
+**问题**：`lib/tts.js` 只会 `fetch` `127.0.0.1:9880`，从不负责把服务拉起来。重启 DSH 后若 TTS 没起，唯一兜底是 Windows 计划任务 `NapCat-TTS-Watchdog`（已压到 PT1M），最坏仍有「最多 60 秒巡检 + 约 40 秒冷启动」的空窗，期间 `napcat_send_voice` 直接报「TTS 服务不可用」。
+
+**改动**：
+
+- `src/tts.ts`（→ `lib/tts.js` + `.d.ts`）
+  - 新增 `TtsDeps` 注入接口（`fetch` / `spawn` / `exists` / `sleep` / `logFile` / `now`），默认走真实实现，测试可全替换，不真起进程。
+  - `isConnectionError(err)`：认 `ECONNREFUSED` / `ECONNRESET` / `ETIMEDOUT` / `EHOSTUNREACH` / `ENOTFOUND` / `EPIPE`，以及 undici 的 `TypeError: fetch failed`（含 `cause.code`）与消息里的 connection refused。
+  - `ensureTtsServer(config, log, deps)`：模块级 `Promise<boolean>` 单例，并发请求共用同一次启动；`finally` 里清空单例，失败后下个请求还能再试（但**单次合成只重试一次**，不会死循环）。
+  - `startTtsServer`：读 `NAPCAT_TTS_PYTHON` / `NAPCAT_TTS_SERVER`，默认 `D:\NapCat\tts\index-tts\.venv\Scripts\python.exe` + `D:\NapCat\tts\tts_server.py`；两个路径都先 `existsSync` 检查，缺一个就返回 false 并 warn「启动器不存在」，直接走原报错。`spawn(python, [server, '--port', <来自 ttsServerUrl 的端口>, '--warmup'], { detached: true, stdio: ['ignore', fd, fd], windowsHide: true })` + `unref()`；`spawn` 的 `error` 事件与 `existsSync` 都兜住，不会抛到调用方。
+  - `healthReady`：500ms 间隔、最多 90 秒轮询 `<ttsServerUrl>/health`，要求 HTTP ok 且 `{ok:true, loaded:true}`；超时返回 false 并 warn。
+  - `synthesizeToWav`：`withGpu` 内首次 `synthesizeOnce` 失败且 `config.ttsAutoStart !== false` 且错误是连接类 → `ensureTtsServer` → 成功才重试**一次** `synthesizeOnce`；返回值/日志行为其余不变，`null` 语义保持（`src/tools.ts:367-370` 的报错文案不用动）。
+- `src/config.ts`：`Config` 加 `ttsAutoStart: boolean`；schema 加 `ttsAutoStart: z.boolean().default(true)…volatile()`；`DEFAULTS` 加 `ttsAutoStart: true`。
+- `client/index.js`：设置页 tts 分组加 `{ key: 'ttsAutoStart', label: 'TTS 服务没起时自动拉起（默认开）', kind: 'boolean' }`。
+- `README.md`：版本行 → `v0.3.23-xb.14`；「本分支新增」加一条；配置表加 `ttsAutoStart` 行；排错表加「语音发不出来（TTS 没起）」。
+- `test/tts-autostart.test.mjs`（新文件，4 例，全假依赖）：①首次 fetch 拒绝 → 触发一次 spawn（断言 `detached:true`、`--port 9880 --warmup`、stdio 重定向）→ 轮询 `/health` → 重试成功，且 `ttsCalls === 2`（只重试一次）；②三个并发 `ensureTtsServer` 共用一次启动（`spawned === 1`、`healthCalls === 2`）；③启动器 `exists: false` → `spawn` 0 次、合成只调 1 次、返回 `null`、日志含「启动器不存在」；④`ttsAutoStart: false` → 不自愈不重试。
+
+**验证**：`npm run build` 通过；`npm test` → **109 tests, 109 pass, 0 fail**（基线 105 + 新增 4）。
+
+**注意**：`src/gpu.ts` 的 `withGpu` 是全插件串行队列，两个并发 `synthesizeToWav` 在合成阶段本来就串行，所以并发单例的用例直接测 `ensureTtsServer` 而不是 `synthesizeToWav`。
+
+**部署与验收（0.3.23-xb.14）**：
+
+- 运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\`：`lib/tts.js`、`lib/tts.d.ts`、`lib/config.js`、`lib/config.d.ts`、`package.json` 已逐个覆盖并 sha256 核对一致。
+- 发布包：`D:\NapCat\releases\dsh-napcat-0.3.23-xb.14.tgz`。
+- **未重启 DSH**，需要重载插件才生效。
+- 人工验收：①停掉 TTS（`Stop-Process` 掉 9880 的 python 或结束计划任务拉起的进程）→ 在 QQ 里让机器人发一条语音 → 首条可能慢 40 秒左右但应成功发出，`D:\NapCat\tts\logs\tts_server.out` 出现新的启动日志；②把 `NAPCAT_TTS_PYTHON` 指到一个不存在的路径再重载 → 发语音应立刻回到「TTS 服务不可用」提示，插件本身不报错、其他功能正常；③设置页能看到「TTS 服务没起时自动拉起」开关。
