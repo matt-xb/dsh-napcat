@@ -95,6 +95,8 @@ export declare class Bridge {
     }) => Promise<void>) | undefined;
     trackTextSend(sessionId: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined;
     private notifyTask;
+    /** 把消息里的语音段换成转写文本段；开关关掉或识别失败时原样返回（toText 回退 [语音]）。 */
+    private resolveVoice;
     /** 把消息里的图片/文件下载到会话收件箱，返回给模型的文本注释（[图片: path]）。 */
     private resolveInboundMedia;
     /** 同一聊天并发进来时只装配一次（并发 create 会撞 write handle）。 */

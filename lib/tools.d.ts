@@ -1,6 +1,7 @@
 /** 模型可调用的工具：主动发消息、列会话、受白名单约束的原始 OneBot 调用。 */
 import type { Context } from '@deepseek-ai/cordis';
 import type { LogLevel, OneBotConnection } from './onebot.js';
+import type { Config } from './config.js';
 export interface ToolDeps {
     /** 会话 id → 当前 QQ 会话（省略 chat_id 时用） */
     keyForSession?: (sessionId: string) => string | undefined;
@@ -22,6 +23,6 @@ export interface ToolDeps {
     /** 把 chatKey → mnemon 空间 id 写进插件缓存 */
     rememberSpace?: (chatKey: string, spaceId: string) => Promise<void>;
     /** 当前解析后的插件配置（发语音/唱歌读 tts* / sing* 字段） */
-    getConfig?: () => Record<string, unknown>;
+    getConfig?: () => Config;
 }
 export declare function registerTools(ctx: Context, conn: OneBotConnection, log: (level: LogLevel, message: string) => void, deps?: ToolDeps): void;

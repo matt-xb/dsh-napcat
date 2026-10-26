@@ -1,7 +1,11 @@
 import { readFile, realpath } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { semanticScores } from './semantic.js'
 
+const MODEL_CACHE = join(homedir(), '.dsh', 'cache', 'stickers')
+const SEMANTIC_WEIGHT = 6
 const SYNONYMS = [
   ['困惑', '看不懂', '没看懂', '问号', '疑惑', '什么鬼', '啥意思'],
   ['累了', '休息', '摸鱼', '瘫', '疲惫', '困了', '好困', '困死', '想睡', '躺平', '摆烂'],
@@ -59,6 +63,46 @@ function score(title: string, tags: string[], queryWords: Set<string>, query: st
   }
   return value
 }
+const semanticText = (title: string, tags: string[], description: string, useWhen: string): string =>
+  [title, ...tags, description, useWhen].filter(Boolean).join(' ')
+
+interface CatalogEntry {
+  id?: unknown
+  path?: unknown
+  sha256?: unknown
+  title?: unknown
+  tags?: unknown
+  description?: unknown
+  useWhen?: unknown
+  avoid?: unknown
+  status?: unknown
+  allowedChat?: unknown
+}
+
+interface Candidate {
+  entry: CatalogEntry & { id: string, path: string, sha256: string }
+  directory: string
+  catalogPath: string
+  title: string
+  tags: string[]
+  description: string
+  useWhen: string
+  lexical: number
+  score: number
+}
+
+async function verifyFile(directory: string, catalogPath: string, entry: Candidate['entry']): Promise<string | null> {
+  const path = resolve(entry.path)
+  if (dirname(path) !== directory || path === catalogPath) return null
+  try {
+    if (await realpath(path) !== path) return null
+    const bytes = await readFile(path)
+    if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256.toLowerCase()) return null
+  } catch {
+    return null
+  }
+  return path
+}
 
 /** Only the current chat selects a scope; query never selects paths or catalogs. */
 export async function findStickers(chatKey: string, query: string, root = '', recentImages: readonly string[] = []): Promise<StickerMatch[]> {
@@ -70,7 +114,7 @@ export async function findStickers(chatKey: string, query: string, root = '', re
   try { base = await realpath(root) } catch { return [] }
   const directories = [base, join(base, 'from-' + scope[1] + '-' + scope[2])]
   const used = new Map(recentImages.filter(isAbsolute).map((value, index) => [imageKey(value), index]))
-  const matches: StickerMatch[] = []
+  const entries: Candidate[] = []
   for (const directory of directories) {
     try {
       const actualDir = await realpath(directory)
@@ -82,33 +126,43 @@ export async function findStickers(chatKey: string, query: string, root = '', re
       if (!Array.isArray(catalog)) continue
       for (const raw of catalog) {
         if (!raw || typeof raw !== 'object') continue
-        const entry = raw as Record<string, unknown>
+        const entry = raw as CatalogEntry
         if (directory !== base ? entry.status !== 'active' || entry.allowedChat !== chatKey
           : (entry.status !== undefined && entry.status !== 'active') || (entry.allowedChat !== undefined && entry.allowedChat !== chatKey)) continue
-        const title = typeof entry.title === 'string' ? entry.title : ''
-        const tags = Array.isArray(entry.tags) ? entry.tags.filter((tag: unknown): tag is string => typeof tag === 'string') : typeof entry.tags === 'string' ? [entry.tags] : []
-        const rank = score(title, tags, queryWords, normalize(query))
-        if (!rank || typeof entry.id !== 'string' || typeof entry.path !== 'string'
+        if (typeof entry.id !== 'string' || typeof entry.path !== 'string'
           || !isAbsolute(entry.path) || typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(entry.sha256)) continue
-        const path = resolve(entry.path)
-        if (dirname(path) !== directory || path === catalogPath) continue
-        try {
-          if (await realpath(path) !== path) continue
-          const bytes = await readFile(path)
-          if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256.toLowerCase()) continue
-        } catch { continue }
-        matches.push({ id: entry.id, path, recentlyUsed: used.has(imageKey(path)), tags, title,
-          description: typeof entry.description === 'string' ? entry.description : '',
-          useWhen: typeof entry.useWhen === 'string' ? entry.useWhen : '',
-          avoid: typeof entry.avoid === 'string' ? entry.avoid : '', score: rank })
+        const title = typeof entry.title === 'string' ? entry.title : ''
+        const tags = Array.isArray(entry.tags) ? entry.tags.filter((tag): tag is string => typeof tag === 'string') : typeof entry.tags === 'string' ? [entry.tags] : []
+        const description = typeof entry.description === 'string' ? entry.description : ''
+        const useWhen = typeof entry.useWhen === 'string' ? entry.useWhen : ''
+        entries.push({ entry: entry as Candidate['entry'], directory, catalogPath, title, tags, description, useWhen,
+          lexical: score(title, tags, queryWords, normalize(query)), score: 0 })
       }
     } catch { /* Missing or redirected catalogs fail closed. */ }
   }
+  if (!entries.length) return []
+  const semantic = await semanticScores(entries.map(item => ({
+    id: item.directory + '|' + item.entry.id,
+    text: semanticText(item.title, item.tags, item.description, item.useWhen),
+  })), query, MODEL_CACHE)
+  for (const item of entries) item.score = item.lexical + SEMANTIC_WEIGHT * (semantic.get(item.directory + '|' + item.entry.id) ?? 0)
   // Rotate within two-point score bands, including after every comparable image was used.
-  const best = Math.max(0, ...matches.map(match => match.score))
-  const tier = (match: StickerMatch): number => Math.floor((best - match.score) / 2)
-  return matches.sort((a, b) => tier(a) - tier(b)
-    || Number(a.recentlyUsed) - Number(b.recentlyUsed)
-    || (used.get(imageKey(a.path)) ?? -1) - (used.get(imageKey(b.path)) ?? -1)
-    || b.score - a.score || a.id.localeCompare(b.id)).slice(0, 5)
+  const best = Math.max(0, ...entries.map(item => item.score))
+  const tier = (item: Candidate): number => Math.floor((best - item.score) / 2)
+  const ranked = entries
+    .filter(item => item.score > 0)
+    .sort((a, b) => tier(a) - tier(b)
+      || Number(used.has(imageKey(a.entry.path))) - Number(used.has(imageKey(b.entry.path)))
+      || (used.get(imageKey(a.entry.path)) ?? -1) - (used.get(imageKey(b.entry.path)) ?? -1)
+      || b.score - a.score || a.entry.id.localeCompare(b.entry.id))
+  const matches: StickerMatch[] = []
+  for (const item of ranked) {
+    if (matches.length >= 5) break
+    const path = await verifyFile(item.directory, item.catalogPath, item.entry)
+    if (!path) continue
+    matches.push({ id: item.entry.id, path, recentlyUsed: used.has(imageKey(path)), tags: item.tags, title: item.title,
+      description: item.description, useWhen: item.useWhen,
+      avoid: typeof item.entry.avoid === 'string' ? item.entry.avoid : '', score: item.score })
+  }
+  return matches
 }

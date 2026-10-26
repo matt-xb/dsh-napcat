@@ -8,6 +8,9 @@ import { isHttpUrl, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, downloadToF
 import { rankByFileName } from './text.js'
 import { sanitizeOutgoingMessage, sanitizeReply, segmentsOf, splitText } from './text.js'
 import { findStickers } from './stickers.js'
+import type { Config } from './config.js'
+import { synthesizeToWav } from './tts.js'
+import { synthesizeSing } from './sing.js'
 import type { ObFriendInfo, ObGroupInfo, ObMessage } from './types.js'
 
 /** 允许通过 napcat_api 透传的动作白名单（只读 + 发消息，避免模型乱调用管理类动作）。 */
@@ -57,6 +60,8 @@ export interface ToolDeps {
   allowedGroups?: () => readonly string[]
   /** 把 chatKey → mnemon 空间 id 写进插件缓存 */
   rememberSpace?: (chatKey: string, spaceId: string) => Promise<void>
+  /** 当前解析后的插件配置（发语音/唱歌读 tts* / sing* 字段） */
+  getConfig?: () => Config
 }
 
 export function registerTools(
@@ -327,6 +332,83 @@ export function registerTools(
     upload_time?: number
   }
 
+  ctx.tools.register(defineTool({
+    name: 'napcat_send_voice',
+    description: '合成并给 QQ 会话发一条语音消息（本机 TTS，用设定的音色/语速）。省略 chat_id 时发到当前会话。emotion 可选：happy/angry/sad/afraid/disgusted/melancholic/surprised/calm，省略=默认情绪。',
+    parameters: {
+      text: { type: 'string', required: true, description: '要念的话（纯文本，别带表情包语法）' },
+      chat_id: { type: 'string', description: '目标会话：private:<QQ号> 或 group:<群号>；省略=当前会话' },
+      emotion: { type: 'string', description: '可选：覆盖默认情绪（英文名或中文名）' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { text: string; chat_id?: string; emotion?: string }
+      const text = input.text.trim()
+      if (text === '') throw new Error('text 为空，没有可念的内容')
+      const target = resolveChat(input.chat_id, exec)
+      checkTarget(exec, target.kind + ':' + target.id)
+      const config = deps.getConfig?.()
+      if (config === undefined || config.ttsEnabled === false) throw new Error('发语音未开启（配置 ttsEnabled=false）')
+      const settings = typeof input.emotion === 'string' && input.emotion.trim() !== ''
+        ? { ...config, ttsEmotion: input.emotion.trim() }
+        : config
+      const wav = await synthesizeToWav(text, settings, log)
+      if (wav === null) {
+        throw new Error('语音合成失败：TTS 服务不可用或超时（' + String(config.ttsServerUrl) + '），改用文字发送')
+      }
+      const file = 'file:///' + wav.replace(/\\/g, '/')
+      checkTarget(exec, target.kind + ':' + target.id)
+      const result = await conn.call<{ message_id?: number | string }>(
+        target.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
+        {
+          ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
+          message: [{ type: 'record', data: { file } }],
+        },
+      )
+      const id = result?.message_id === undefined ? undefined : String(result.message_id)
+      log('info', '工具发语音 ' + target.kind + ':' + target.id + ' (' + text.length + ' 字)')
+      return '已发送语音到 ' + target.kind + ':' + target.id + '（' + text.length + ' 字）' + (id === undefined ? '' : '，message_id: ' + id)
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'napcat_sing',
+    description: '唱一首歌并发语音消息（本机离线歌声合成 + 音色转换）。score 是三行简谱：第一行歌词、第二行音高（空格分隔，一个字对应一个音符）、第三行每音符时值（秒）；一个字唱多个音用 | 分组，休止写 rest、对应字写 SP。例：「一闪一闪亮晶晶\\nC4 C4 G4 G4 A4 A4 G4\\n0.55 0.55 0.55 0.55 0.55 0.55 0.9」。整链约 20–40 秒（冷启更久），期间独占显存。省略 chat_id 时发到当前会话。',
+    parameters: {
+      score: { type: 'string', required: true, description: '简谱文本：歌词行 + 音高行 + 时值行（秒），或 {"text","notes","durs"} 的 JSON' },
+      chat_id: { type: 'string', description: '目标会话：private:<QQ号> 或 group:<群号>；省略=当前会话' },
+    },
+    output: textOutput(),
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const input = args as { score: string; chat_id?: string }
+      const score = typeof input.score === 'string' ? input.score.trim() : ''
+      if (score === '') throw new Error('score 为空，没有可唱的内容')
+      const target = resolveChat(input.chat_id, exec)
+      checkTarget(exec, target.kind + ':' + target.id)
+      const config = deps.getConfig?.()
+      if (config === undefined || config.singEnabled === false) throw new Error('唱歌未开启（配置 singEnabled=false）')
+      let sung
+      try {
+        sung = await synthesizeSing(score, config, log)
+      } catch (error) {
+        throw new Error('唱歌失败：' + (error instanceof Error ? error.message : String(error)))
+      }
+      const file = 'file:///' + sung.wav.replace(/\\/g, '/')
+      checkTarget(exec, target.kind + ':' + target.id)
+      const result = await conn.call<{ message_id?: number | string }>(
+        target.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
+        {
+          ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
+          message: [{ type: 'record', data: { file } }],
+        },
+      )
+      const id = result?.message_id === undefined ? undefined : String(result.message_id)
+      log('info', '工具唱歌 ' + target.kind + ':' + target.id + '（' + (sung.audioSec ?? '?') + 's）')
+      return '已发送歌曲到 ' + target.kind + ':' + target.id + '（' + (sung.audioSec ?? '?') + ' 秒）' + (id === undefined ? '' : '，message_id: ' + id)
+    },
+  }))
   const allowedGroups = deps.allowedGroups
   const resolveGroup = (explicit: unknown, exec: unknown): string => {
     const raw = typeof explicit === 'string' && explicit.trim() !== '' ? explicit.trim() : undefined

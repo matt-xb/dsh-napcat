@@ -1,0 +1,147 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import type { FeatureExtractionPipeline } from '@xenova/transformers'
+
+const MODEL = 'Xenova/bge-small-zh-v1.5'
+const MIN_COSINE = 0.45
+const BAND = 0.08
+const CACHE_FILE = 'stickers-embeddings.json'
+
+export interface SemanticItem {
+  id: string
+  text: string
+}
+
+let extractor: FeatureExtractionPipeline | undefined
+let ready: Promise<boolean> | undefined
+const vectors = new Map<string, Float32Array>()
+const keyOf = (id: string, text: string): string => id + '\u0000' + text
+
+// @xenova/transformers statically imports sharp (a native addon that ships its own
+// libvips DLLs); loading it in-process breaks the host's sharp 0.35 and with it every
+// attachment read. We only feed it text, so stub the module out before it is imported.
+function stubSharp(): void {
+  const require = createRequire(import.meta.url)
+  let entry: string
+  try {
+    entry = require.resolve('sharp')
+  } catch {
+    return
+  }
+  if (require.cache[entry]) return
+  const stub = (): never => {
+    throw new Error('sharp is stubbed inside the DSH process: image APIs are unavailable')
+  }
+  require.cache[entry] = { id: entry, filename: entry, loaded: true, exports: stub, children: [], paths: [] } as unknown as NodeJS.Module
+}
+
+async function loadExtractor(cacheDir: string): Promise<FeatureExtractionPipeline> {
+  if (extractor) return extractor
+  stubSharp()
+  const mod = await import('@xenova/transformers')
+  mod.env.remoteHost = 'https://hf-mirror.com'
+  mod.env.cacheDir = cacheDir
+  mod.env.allowLocalModels = true
+  extractor = await mod.pipeline('feature-extraction', MODEL, { quantized: true })
+  return extractor
+}
+
+async function encode(texts: string[], cacheDir: string): Promise<Float32Array[]> {
+  const pipe = await loadExtractor(cacheDir)
+  const out = await pipe(texts, { pooling: 'mean', normalize: true })
+  const dim = out.dims[1] ?? 0
+  const data = out.data
+  return texts.map((_, index) => {
+    const vec = new Float32Array(dim)
+    for (let i = 0; i < dim; i++) vec[i] = data[index * dim + i] ?? 0
+    return vec
+  })
+}
+
+const normalizeText = (value: string): string => value.normalize('NFKC').replace(/\s+/g, ' ').trim()
+
+async function loadCache(cacheDir: string): Promise<Record<string, number[]> | null> {
+  try {
+    const raw = JSON.parse(await readFile(join(cacheDir, CACHE_FILE), 'utf8')) as { model?: unknown; items?: Record<string, number[]> }
+    if (raw?.model !== MODEL || !raw.items) return null
+    return raw.items
+  } catch {
+    return null
+  }
+}
+
+async function persist(cacheDir: string): Promise<void> {
+  const items: Record<string, number[]> = {}
+  for (const [key, vec] of vectors) items[key] = Array.from(vec, value => Math.round(value * 1e4) / 1e4)
+  try {
+    await mkdir(cacheDir, { recursive: true })
+    await writeFile(join(cacheDir, CACHE_FILE), JSON.stringify({ model: MODEL, dim: 512, items }), 'utf8')
+  } catch { /* Cache is optional; a failed write only costs a re-encode. */ }
+}
+
+function init(items: readonly SemanticItem[], cacheDir: string): Promise<boolean> {
+  ready ??= (async () => {
+    const cached = await loadCache(cacheDir)
+    const pending: Array<{ key: string; text: string }> = []
+    for (const item of items) {
+      const text = normalizeText(item.text)
+      if (!text) continue
+      const key = keyOf(item.id, text)
+      const hit = cached?.[key]
+      if (Array.isArray(hit) && hit.length === 512) {
+        vectors.set(key, Float32Array.from(hit))
+        continue
+      }
+      pending.push({ key, text })
+    }
+    if (pending.length) {
+      const encoded = await encode(pending.map(item => item.text), cacheDir)
+      pending.forEach((item, index) => vectors.set(item.key, encoded[index] ?? new Float32Array(0)))
+      await persist(cacheDir)
+    }
+    return true
+  })()
+  return ready
+}
+
+/**
+ * Cosine similarity per catalog id. Returns an empty map when the local model
+ * is missing or fails, so the caller keeps its lexical ranking untouched.
+ */
+export async function semanticScores(items: readonly SemanticItem[], query: string, cacheDir: string): Promise<Map<string, number>> {
+  const scores = new Map<string, number>()
+  if (!items.length || !query.trim()) return scores
+  try {
+    await init(items, cacheDir)
+    const [queryVec] = await encode([normalizeText(query)], cacheDir)
+    if (!queryVec) return scores
+    const dots: Array<[string, number]> = []
+    for (const item of items) {
+      const vec = vectors.get(keyOf(item.id, normalizeText(item.text)))
+      if (!vec) continue
+      let dot = 0
+      for (let i = 0; i < vec.length; i++) dot += (vec[i] ?? 0) * (queryVec[i] ?? 0)
+      dots.push([item.id, dot])
+    }
+    if (!dots.length) return scores
+    // bge scores cluster high, so keep only the band below the best hit.
+    const top = Math.max(...dots.map(([, dot]) => dot))
+    if (top < MIN_COSINE) return scores
+    for (const [id, dot] of dots) {
+      if (dot >= top - BAND) scores.set(id, dot)
+    }
+  } catch {
+    return new Map()
+  }
+  return scores
+}
+
+export async function warmSemantic(items: readonly SemanticItem[], cacheDir: string): Promise<boolean> {
+  try {
+    await init(items, cacheDir)
+    return true
+  } catch {
+    return false
+  }
+}

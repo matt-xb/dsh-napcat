@@ -200,7 +200,20 @@ function stripRuntimeContext(text: string): string {
 export function sanitizeReply(text: string): string | null {
   const clean = text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, '')
   if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(clean.replace(/\s+/g, ''))) return null
-  return stripRuntimeContext(clean)
+  return stripToolSyntax(stripRuntimeContext(clean))
+}
+
+/** Leaked tool-call syntax (full-width pipe variants included) must not reach the chat. */
+function stripToolSyntax(text: string): string {
+  if (!/DSML|antml:|<\/?function_calls>|<\/?invoke\b|<br\s*\/?>|<\/?(?:div|p|span)\b/i.test(text)) return text
+  return text
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .split(/\r?\n/)
+    .filter(line => !/^\s*<\/?(?:div|p|span)\b[^>]*>\s*$/i.test(line))
+    .filter(line => !/DSML|antml:|<\/?function_calls>|<\/?invoke\b|^[\s>|-]*(?:parameter|nope)\b.*$/i.test(line))
+    .join('\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim()
 }
 
 /** Compact short Chinese prose only; preserve structured and long-form output. */

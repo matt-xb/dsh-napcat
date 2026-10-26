@@ -79,6 +79,19 @@ export interface Config {
   warmupStaleMinutes: number
   warmupImages: boolean
   warmupImageLimit: number
+  voiceToText: boolean
+  voiceWhisperBin: string
+  voiceWhisperModel: string
+  voiceLanguage: string
+  voiceTimeoutMs: number
+  ttsEnabled: boolean
+  ttsServerUrl: string
+  ttsVoiceRef: string
+  ttsSpeed: number
+  ttsEmotion: string
+  ttsTimeoutMs: number
+  singEnabled: boolean
+  singTimeoutMs: number
 }
 
 export const Config: Z<Config> = z.object({
@@ -157,6 +170,19 @@ export const Config: Z<Config> = z.object({
   warmupStaleMinutes: z.natural().default(10).description('预热新鲜度：缓冲最新一条超过这么多分钟也算过期，会重新拉历史').volatile(),
   warmupImages: z.boolean().default(true).description('预热时把历史消息里的图片也缓存（用 file id 重新解析，解析不了=已过期）').volatile(),
   warmupImageLimit: z.natural().default(30).description('单次预热最多下载几张历史图片（每日配额之外的保护）').volatile(),
+  voiceToText: z.boolean().default(true).description('语音消息自动转文字（本机 whisper.cpp；失败/超时回退 [语音]）').volatile(),
+  voiceWhisperBin: z.string().default('D:/NapCat/stickers/_whisper/bin/cuda12/Release/whisper-cli.exe').description('whisper-cli 可执行文件路径').volatile(),
+  voiceWhisperModel: z.string().default('D:/NapCat/stickers/_whisper/models/ggml-large-v3-turbo.bin').description('whisper 模型路径（推荐 large-v3-turbo）').volatile(),
+  voiceLanguage: z.string().default('zh').description('识别语言（zh=中文，auto=自动检测）').volatile(),
+  voiceTimeoutMs: z.natural().default(30000).description('单条语音识别超时（毫秒），超时回退 [语音]').volatile(),
+  ttsEnabled: z.boolean().default(true).description('发语音：开启 napcat_send_voice（本机 TTS 服务）').volatile(),
+  ttsServerUrl: z.string().default('http://127.0.0.1:9880').description('本机 TTS 服务地址').volatile(),
+  ttsVoiceRef: z.string().default('D:/NapCat/tts/refs/user/u3.wav').description('音色参考音频绝对路径').volatile(),
+  ttsSpeed: z.number().default(1.0).description('语速（1=原速，越大越快）').volatile(),
+  ttsEmotion: z.string().default('calm').description('默认情绪：happy/angry/sad/afraid/disgusted/melancholic/surprised/calm').volatile(),
+  ttsTimeoutMs: z.natural().default(30000).description('单条语音合成超时（毫秒）').volatile(),
+  singEnabled: z.boolean().default(true).description('唱歌：开启 napcat_sing（本机歌声合成 + 音色转换）').volatile(),
+  singTimeoutMs: z.natural().default(300000).description('整条唱歌链路超时（毫秒，含合成与音色转换）').volatile(),
 }) as unknown as Z<Config>
 
 /** 各字段的内置默认值（与 schema 的 default 保持一致，供 volatile 字段兜底）。 */
@@ -211,6 +237,19 @@ export const DEFAULTS: Config = {
   warmupStaleMinutes: 10,
   warmupImages: true,
   warmupImageLimit: 30,
+  voiceToText: true,
+  voiceWhisperBin: 'D:/NapCat/stickers/_whisper/bin/cuda12/Release/whisper-cli.exe',
+  voiceWhisperModel: 'D:/NapCat/stickers/_whisper/models/ggml-large-v3-turbo.bin',
+  voiceLanguage: 'zh',
+  voiceTimeoutMs: 30000,
+  ttsEnabled: true,
+  ttsServerUrl: 'http://127.0.0.1:9880',
+  ttsVoiceRef: 'D:/NapCat/tts/refs/user/u3.wav',
+  ttsSpeed: 1.0,
+  ttsEmotion: 'calm',
+  ttsTimeoutMs: 30000,
+  singEnabled: true,
+  singTimeoutMs: 300000,
 }
 
 /** volatile 字段在运行时是 `{ get(): T }` 的稳定引用（cosmokit 的 Volatile）。 */
