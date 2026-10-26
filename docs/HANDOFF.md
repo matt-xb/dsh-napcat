@@ -61,3 +61,28 @@
 ## 已有构建不一致（本次未扩大修复）
 
 本次开始时工作树干净，但基线 `src/stickers.ts` / `src/text.ts` 与已提交的 `lib/stickers.js` / `lib/text.js` 不一致。全量 tsc 会覆盖现有已上线表情匹配/文本过滤逻辑；本次构建后恢复这两个无关 lib 文件到原提交，避免功能退回，再跑完整测试。后续开发不可把这两文件的构建退回夹入无关提交；应单独对齐源码与既有编译功能。本次未修改两文件的源码或已提交构建逻辑。
+
+## 修复：归档/静默吞回复、媒体后多余确认句、裸标签与本地路径、生图硬规则（0.3.23-xb.13，2026-10-26）
+
+- 现象（用户报的三类）：①DSH 里归档对话后，再在 QQ 发消息后台收到但回复不推回；②发图/语音后那条消息后面还跟一句多余文字，群里还出现过 `![](D:\NapCat\stickers\bqb-smug-06.gif)` 这种把 markdown+本地路径当正文发出；③新群（1129828541）里蹦出后台思考/不该出现的东西，另有一次回复末尾多出 `</output>`。
+- 根因一（吞回复）在会话层：`dispatch` 原本 `if (chat.fresh !== true)` 才上盾（注释假设新建会话不会失效），而归档后 `ensureChat` 恰好走新建路径（`fresh: true`）→ 一旦这个新会话压根没产生 turn/start，既没有 turn/end 也没有任何提示，整轮静默；`turnStarted` 是死字段（全文只有置 false 与读取，没有置 true），看门狗 alive 判定实际只剩 `lastEventAt > dispatchedAt`。
+- 根因二（媒体后补一句）：`trackTextSend` 只在纯文本发送后置 `toolTextComplete`，`napcat_send_image` / `send_file` / `send_voice` / `sing` 发完不通知桥，turn/end 就把模型写的「已发图」当正文补发。历史线索：`bea3f24` 曾加 `recordMediaSend`，`5e16d2f` 把任务投递改成 `mediaReceiver` + `notify` 时把它整段删掉，前台链路随之回归。
+- 根因三（裸标签/本地路径）：`stripToolSyntax` 只认 `DSML|antml:|function_calls|invoke|<br>|div|p|span`，`</output>`、`<result>`、HTML 注释、`![](D:\…jpg)` 全放行；已确认这些是模型自己吐进 `assistant/message` 的 text 块（会话 turn 的 text 自带），不是桥拼装带进来的。
+- 根因四（生图）：插件提示词只有 `TEXT_REPLY_RULES` / `GROUP_REPLY_RULES` / `TASK_REPLY_RULES`，生图硬规则只写在用户全局规则里，模型在插件会话里看不到。
+- 修复：
+  - `src/bridge.ts:1319` 投递后一律上盾（例外：`chat.outputActive === true`，即上一轮还在跑、本条是排队的消息，此时没有 turn/start 属正常）；`src/bridge.ts:1399-1402` turn/start 到达即 `clearTimeout` + `startTimer=undefined` + `turnStarted=true`；`armWatchdog` 里给 timer 加 `unref?.()`，别拖住进程退出。
+  - `src/tools.ts` 新增 `markOutputSent(sessionId, chatKey)`（`ToolDeps` + `markSent(exec, target)` 辅助），在 `napcat_send_image`、`napcat_send_file`（file 段/upload 两个分支）、`napcat_send_voice`、`napcat_sing`、`napcat_api` 的非纯文本发送成功后调用；`src/bridge.ts:756-761` 实现为 `outputActive` 时置 `toolTextComplete = true`；`src/index.ts:74` 接线。
+  - `src/text.ts` `stripToolSyntax` 重写：逐行扫，``` 围栏内原样保留；整行只有标签/HTML 注释、整行是本地媒体绝对路径的直接丢；非代码段再剥 `![](本地绝对路径)` 与包装标签（`WRAPPER_TAGS` 白名单，未列出的普通标签如 `<b>` 原样留着）；保留原有 DSML/antml/invoke/parameter 行过滤与换行折叠。
+  - `src/bridge.ts:46-47` 新增 `IMAGE_REPLY_RULES` 并在 `personaText`（`:1217`）拼进所有 QQ 会话。
+- 验证：`npm run build` 通过；`npm test` → **105 tests, 105 pass, 0 fail**。新增用例：`test/bridge-integration.test.mjs`「watchdog covers brand-new chats and is disarmed by turn/start」（dispatch 后 `startTimer` 存在 → turn/start 后为 undefined 且 `turnStarted === true`）；`test/migration-text-memory.test.mjs`「wrapper tags and local media paths never reach QQ as text」（`</output>` 尾行、`<output>好了</output>`→`好了`、注释行、`![](D:\…)`、独占一行本地路径都会被剥；`[已发送图片：…]` 保留；围栏/反引号内不动；`a < b 且 c > d` 不误伤）。
+- 未改：`droppedText` 仍然只留 warn 不代发（既有测试 `dropped tool-step narration warns once and is never auto-sent` 与 `multiple tool steps and tool-only completion do not become user-facing replies` 明确要求，不能靠补发工具步叙述解决吞回复）。
+- 已知局限：看门狗仍以 10s 为界，模型侧极慢排队（10s 内既无 turn/start 也无任何事件）在排队消息场景不会误触发，但若宿主真的接了消息又不发任何事件，只能靠一次重投后给用户提示；`turnStarted` 现在才真正被置 true，历史代码里的 `fresh` 字段仅用于这一处判断，已不再影响上盾。
+- 交付：见下方部署小节。
+
+## 部署与验收（0.3.23-xb.13）
+
+- 源码与构建：`src/{bridge,index,text,tools}.ts` 改完，`npm run build`（tsc，outDir `lib`）已跑，`lib/` 同步。
+- 回归：`npm test` 105/105 全绿，无跳过。
+- 安装：`D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\`，profile `package.json` 第 10 行仍走 `github:matt-xb/dsh-napcat`；本次需重载插件（或重启宿主）才生效，**未擅自重启**。
+- 需人工验收：①归档一个 QQ 会话后再发消息应能正常回复（不再静默）；②发图/语音后不应再跟一句「已发图」；③群里不应再出现 `![](D:\…)`/`</output>`；④生图应走 `image_generate`。
+- 已知局限：若宿主接了 followup 却既不产生 turn/start 也不发任何 session 事件，插件只能重投一次后提示「会话没有响应」；这是兜底而不是根治宿主侧卡死。

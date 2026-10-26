@@ -48,6 +48,23 @@ test('runtime time-context quoted by the model is stripped, real prose untouched
   assert.equal(sanitizeReply('Elapsed since the preceding model-visible message: 这是我编的句子'), 'Elapsed since the preceding model-visible message: 这是我编的句子')
 })
 
+test('wrapper tags and local media paths never reach QQ as text', () => {
+  // 模型自己吐的包装标签：整行只剩标签就删，夹在正文里也删。
+  assert.equal(sanitizeReply('还在改，没修完\n</output>'), '还在改，没修完')
+  assert.equal(sanitizeReply('<output>好了</output>'), '好了')
+  assert.equal(sanitizeReply('<!-- 思考 -->\n看图'), '看图')
+  // 图片已由工具发过：markdown + 本地绝对路径不能当文字再发一遍。
+  assert.equal(sanitizeReply('![](D:\\NapCat\\stickers\\bqb-shock-01.jpg)'), '')
+  assert.equal(sanitizeReply('\n![](D:\\NapCat\\stickers\\bqb-smug-06.gif)'), '')
+  assert.equal(sanitizeReply('[已发送图片：bqb-shock-01.jpg]'), '[已发送图片：bqb-shock-01.jpg]')
+  assert.equal(sanitizeReply('D:\\NapCat\\stickers\\maid-045-shy.png'), '')
+  // 代码块和行内反引号里的标签/路径是内容，原样保留。
+  assert.equal(sanitizeReply('示例：\n```\n<output>x</output>\n```'), '示例：\n```\n<output>x</output>\n```')
+  assert.equal(sanitizeReply('写成 `<output>` 就行'), '写成 `<output>` 就行')
+  // 正文里正常出现的尖括号不受影响。
+  assert.equal(sanitizeReply('a < b 且 c > d'), 'a < b 且 c > d')
+})
+
 test('recent image memory preserves concurrent deliveries and isolates chat/role', async () => {
   const root = await mkdtemp(join(tmpdir(), 'napcat-memory-'))
   try {

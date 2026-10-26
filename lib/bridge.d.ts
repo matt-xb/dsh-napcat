@@ -93,6 +93,7 @@ export declare class Bridge {
         name: string;
         caption?: string;
     }) => Promise<void>) | undefined;
+    markOutputSent(sessionId: string, chatKey: string): void;
     trackTextSend(sessionId: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined;
     private notifyTask;
     /** 把消息里的语音段换成转写文本段；开关关掉或识别失败时原样返回（toText 回退 [语音]）。 */

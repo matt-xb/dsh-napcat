@@ -50,6 +50,8 @@ export interface ToolDeps {
   keyForSession?: (sessionId: string) => string | undefined
   targetAllowed?: (sessionId: string, chatKey: string) => boolean
   trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined
+  /** 媒体（图/文件/语音/歌）已送达：本轮输出算完成，桥不再补发结尾确认句。 */
+  markOutputSent?: (sessionId: string, chatKey: string) => void
   taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: { kind: 'image' | 'file'; url: string; name: string; caption?: string }) => Promise<void>) | undefined
   recordImageSend?: (chatKey: string, source: string, name: string) => Promise<void>
   recentImages?: (chatKey: string) => Promise<string[]>
@@ -88,6 +90,11 @@ export function registerTools(
       throw new Error('需要 chat_id（形如 private:123456 或 group:789012）：当前调用不在某个 QQ 会话里')
     }
     return parseChatId(derived)
+  }
+
+  /** 媒体送达后通知桥：本轮已有输出，别再补发模型写的结尾确认句。 */
+  const markSent = (exec: unknown, target: { kind: 'private' | 'group'; id: string }): void => {
+    deps.markOutputSent?.(String((exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
   }
 
   const sendSegments = async (
@@ -216,6 +223,7 @@ export function registerTools(
       const sent = pureText ? deps.trackTextSend?.(String(exec?.agent?.session?.id ?? ''), targetKind + ':' + String(targetId)) : undefined
       const data = await conn.call<unknown>(input.action, params)
       if (pureText) await sent?.(segments.filter(seg => seg.type === 'text').map(seg => String(seg.data?.text ?? '')).join(''), true)
+      else if (sending) markSent(exec, { kind: targetKind as 'private' | 'group', id: String(targetId) })
       return JSON.stringify(data ?? null, null, 2)
     },
   }))
@@ -267,6 +275,7 @@ export function registerTools(
       }
       message.push({ type: 'image', data: { file: image.url } })
       const id = await sendSegments(target, message, exec)
+      markSent(exec, target)
       try { await deps.recordImageSend?.(target.kind + ':' + target.id, input.source, image.name) }
       catch (error) { log('warn', '图片已送达但记录失败: ' + String(error)) }
       log('info', '工具发图片 ' + String(target.id) + ' (' + Math.round(image.bytes / 1024) + 'KB)')
@@ -301,6 +310,7 @@ export function registerTools(
       // ① 先试文件消息段（部分 NapCat 版本支持 base64）
       try {
         const id = await sendSegments(target, [{ type: 'file', data: { file: file.url, name: displayName } }], exec)
+        markSent(exec, target)
         log('info', '工具发文件（file 段）' + String(target.id) + ' (' + Math.round(file.bytes / 1024) + 'KB)')
         return '已发送文件 ' + displayName + '（' + Math.round(file.bytes / 1024) + 'KB）' + (id === undefined ? '' : '，message_id: ' + id)
       } catch (error) {
@@ -315,6 +325,7 @@ export function registerTools(
         } else {
           await conn.call('upload_private_file', { user_id: target.id, file: file.url, name: displayName })
         }
+        markSent(exec, target)
         log('info', '工具发文件（upload）' + String(target.id) + ' (' + Math.round(file.bytes / 1024) + 'KB)')
         return '已通过上传接口发送文件 ' + displayName + '（' + Math.round(file.bytes / 1024) + 'KB）'
       } catch (error) {
@@ -367,6 +378,7 @@ export function registerTools(
         },
       )
       const id = result?.message_id === undefined ? undefined : String(result.message_id)
+      markSent(exec, target)
       log('info', '工具发语音 ' + target.kind + ':' + target.id + ' (' + text.length + ' 字)')
       return '已发送语音到 ' + target.kind + ':' + target.id + '（' + text.length + ' 字）' + (id === undefined ? '' : '，message_id: ' + id)
     },
@@ -405,6 +417,7 @@ export function registerTools(
         },
       )
       const id = result?.message_id === undefined ? undefined : String(result.message_id)
+      markSent(exec, target)
       log('info', '工具唱歌 ' + target.kind + ':' + target.id + '（' + (sung.audioSec ?? '?') + 's）')
       return '已发送歌曲到 ' + target.kind + ':' + target.id + '（' + (sung.audioSec ?? '?') + ' 秒）' + (id === undefined ? '' : '，message_id: ' + id)
     },

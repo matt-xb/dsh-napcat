@@ -331,6 +331,15 @@ test('queued messages cannot wipe current output or change its admitted task sna
   f.emit('user/message', queued); assert.equal(f.chat.taskInput[0].attachmentId, 'synthetic-reference-B')
   assert.equal(f.chat.pendingTaskInputs.size, 0)
 })
+test('watchdog covers brand-new chats and is disarmed by turn/start', async () => {
+  const f = fixture()
+  // fresh 不再豁免看门狗：新会话也可能一投就废（刚建好又被归档）
+  f.b.dispatch(f.chat, '发出去就没了')
+  assert.notEqual(f.chat.startTimer, undefined)
+  f.start(1)
+  assert.equal(f.chat.startTimer, undefined)
+  assert.equal(f.chat.turnStarted, true)
+})
 test('non-model/interrupted/stale events never leak; duplicate end sends once; memory failure does not resend', async () => {
   const f = fixture(); f.start(1)
   f.message('notice', 1, { source: { kind: 'model-selection' } })

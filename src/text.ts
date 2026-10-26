@@ -203,13 +203,41 @@ export function sanitizeReply(text: string): string | null {
   return stripToolSyntax(stripRuntimeContext(clean))
 }
 
+/** 包装标签：模型把这些外壳当正文吐出来（`</output>`、`<result>`、`<!-- … -->`）。 */
+const WRAPPER_TAGS = new Set([
+  'output', 'result', 'response', 'thinking', 'reasoning', 'answer', 'reply', 'final', 'analysis',
+  'reflection', 'tool_call', 'tool_result', 'function_call', 'function_result', 'function_calls',
+  'parameter', 'invoke', 'ap', 'div', 'p', 'span',
+])
+const ANY_TAG = /<\/?([A-Za-z][A-Za-z0-9_.:-]{0,32})\s*\/?>/g
+const TAG_ONLY_LINE = /^(?:\s*(?:<!--[\s\S]*?-->|<[^>]+>)\s*)+$/
+/** 本地图片被写成 markdown 图片语法：图已由工具发过，这行不能当文字再发一遍。 */
+const LOCAL_IMAGE_MARKDOWN = /!\[[^\]]*\]\(\s*<?(?:[A-Za-z]:[\\/]|file:\/\/\/?)[^)\s>]*>?\s*\)/gi
+/** 独占一行的本地媒体绝对路径。 */
+const LOCAL_MEDIA_LINE = /^[A-Za-z]:[\\/].*\.(?:png|jpe?g|gif|webp|bmp|mp4|wav|mp3|amr|silk)$/i
+
 /** Leaked tool-call syntax (full-width pipe variants included) must not reach the chat. */
 function stripToolSyntax(text: string): string {
-  if (!/DSML|antml:|<\/?function_calls>|<\/?invoke\b|<br\s*\/?>|<\/?(?:div|p|span)\b/i.test(text)) return text
-  return text
-    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
-    .split(/\r?\n/)
-    .filter(line => !/^\s*<\/?(?:div|p|span)\b[^>]*>\s*$/i.test(line))
+  const lines: string[] = []
+  let fenced = false
+  for (const line of text.replace(/<\s*br\s*\/?\s*>/gi, '\n').split(/\r?\n/)) {
+    // 代码块里的标签原样保留：那里可能是真代码。
+    if (/^\s*```/.test(line)) {
+      fenced = !fenced
+      lines.push(line)
+      continue
+    }
+    if (fenced) {
+      lines.push(line)
+      continue
+    }
+    const trimmed = line.trim()
+    if (LOCAL_MEDIA_LINE.test(trimmed) || TAG_ONLY_LINE.test(trimmed)) continue
+    // 行内反引号里的内容也不动。
+    lines.push(line.split(/(`[^`]*`)/).map((part, index) => index % 2 === 1 ? part
+      : part.replace(LOCAL_IMAGE_MARKDOWN, '').replace(ANY_TAG, (whole, tag: string) => WRAPPER_TAGS.has(String(tag).toLowerCase()) ? '' : whole)).join(''))
+  }
+  return lines
     .filter(line => !/DSML|antml:|<\/?function_calls>|<\/?invoke\b|^[\s>|-]*(?:parameter|nope)\b.*$/i.test(line))
     .join('\n')
     .replace(/\n{2,}/g, '\n')

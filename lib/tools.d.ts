@@ -7,6 +7,8 @@ export interface ToolDeps {
     keyForSession?: (sessionId: string) => string | undefined;
     targetAllowed?: (sessionId: string, chatKey: string) => boolean;
     trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined;
+    /** 媒体（图/文件/语音/歌）已送达：本轮输出算完成，桥不再补发结尾确认句。 */
+    markOutputSent?: (sessionId: string, chatKey: string) => void;
     taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: {
         kind: 'image' | 'file';
         url: string;
