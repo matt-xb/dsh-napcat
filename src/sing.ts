@@ -1,7 +1,7 @@
 /**
  * 唱歌（"嗓子"）：简谱 → DiffSinger 歌声合成 → Seed-VC 音色转换 → wav，供 napcat_sing 发 record 段。
  *
- * 全离线、本机跑：SVS 出 24kHz 原唱，Seed-VC 转成 u3 音色出 44.1kHz。
+ * 全离线、本机跑：SVS 出 24kHz 原唱，Seed-VC 转成 config.ttsVoiceRef 指定音色出 44.1kHz。
  * Seed-VC 峰值显存 11–13 GiB，所以整链走 gpu.js 的串行队列，和 TTS 排同一条队。
  * 任一步失败都抛 Error（带步骤名 + stderr 摘要），由工具层转成文字错误。
  */
@@ -94,12 +94,13 @@ async function singOnce(scoreText: string, config: Config, log: Log): Promise<Si
     const matched = /"audio_sec":\s*([0-9.]+)/.exec(svs.stdout)
     const audioSec = matched?.[1] === undefined ? undefined : Number(matched[1])
 
-    log('debug', '唱歌：音色转换 → u3')
+    const targetVoice = String(config.ttsVoiceRef ?? '').trim() || 'D:/NapCat/tts/refs/user/yinyue_ref_n24.wav'
+    log('debug', '唱歌：音色转换 → ' + targetVoice)
     const tSvc = Date.now()
     await runStep('音色转换', SVC_PY, [
       'inference.py',
       '--source', rawWav,
-      '--target', 'D:/NapCat/tts/refs/user/u3.wav',
+      '--target', targetVoice,
       '--output', vcDir,
       '--diffusion-steps', '50', '--length-adjust', '1.0',
       '--inference-cfg-rate', '0.7',

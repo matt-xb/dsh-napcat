@@ -1,7 +1,7 @@
 /**
  * 唱歌（"嗓子"）：简谱 → DiffSinger 歌声合成 → Seed-VC 音色转换 → wav，供 napcat_sing 发 record 段。
  *
- * 全离线、本机跑：SVS 出 24kHz 原唱，Seed-VC 转成 u3 音色出 44.1kHz。
+ * 全离线、本机跑：SVS 出 24kHz 原唱，Seed-VC 转成 config.ttsVoiceRef 指定音色出 44.1kHz。
  * Seed-VC 峰值显存 11–13 GiB，所以整链走 gpu.js 的串行队列，和 TTS 排同一条队。
  * 任一步失败都抛 Error（带步骤名 + stderr 摘要），由工具层转成文字错误。
  */
