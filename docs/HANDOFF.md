@@ -137,3 +137,26 @@
 - 发布包：`D:\NapCat\releases\dsh-napcat-0.3.23-xb.15.tgz`（解压后 `lib` 与安装目录 sha256 一致）。
 - **未重启 DSH**，需重载插件后插件侧默认值才生效；服务端映射可保证重载前的旧路径请求也已使用新音色。
 - 人工验收：让机器人发一条语音，确认音色为去混响的 g4、无旧 u3 的混响尾音；`tts_server.py` 未改动、未重启。
+
+## 修复：音色换为银月参考（0.3.23-xb.16，2026-10-27）
+
+**背景**：旧参考 `refs/user/user_ref_dereverb_g4.wav`（g4 手机录音去混响）实测 **<200Hz 能量仅 13%**、与真人相似度 **0.44**，听感「饱满过头 / 像 30 岁 / 太装」，用户已否决。
+
+**新参考**：用户提供的银月配音 mp3，经转码得到 `refs/user/yinyue_raw.wav`（14.08s），再生成 `yinyue_ref.wav` 与 `yinyue_ref_n20/n24/n27.wav`；**用户 A/B 试听后选定 `yinyue_ref_n24.wav`**。
+
+**改动**：
+
+- 服务端 `D:\NapCat\tts\tts_server.py`（备份 `tts_server.py.bak-yinyue`）：`DEFAULT_VOICE = refs/user/yinyue_ref_n24.wav`；`FORMANT` 默认 `"1.0"`（不再做共振峰后处理）；legacy 映射名单扩展到 `u3.wav / user_ref_new.wav / user_ref_dereverb_g4.wav / raw_thin2.wav / raw_clean.wav`。
+- `src/config.ts`：`ttsVoiceRef` 默认值 `D:/NapCat/tts/refs/user/user_ref_dereverb_g4.wav` → `D:/NapCat/tts/refs/user/yinyue_ref_n24.wav`（zod schema `default` 与 `DEFAULTS` 两处同步）。`ttsEmotion` 仍为 `calm`、`alpha` 仍为 `0.45`，新音色不需要改这两项。
+- `src/tts.ts`：确认请求参数 `alpha: '0.45'`；插件侧无任何 formant/共振峰调用，也无硬编码 `1.07`（共振峰后处理只在服务端，现已关闭）。
+
+**版本**：`package.json` → `0.3.23-xb.16`；`README.md` 版本行同步。
+
+**验证**：`npm run build` 通过；`npm test` → **109 tests, 109 pass, 0 fail**（基线一致，未新增/删除用例，无测试写死旧 g4 路径或 1.07）。服务端重启后实测合成正常（`D:\NapCat\tts\out\yinyue\live_check.wav`，**F0 257Hz**、时长 5.57s）。
+
+**部署与验收（0.3.23-xb.16）**：
+
+- 运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\`：`lib/config.js`、`lib/config.d.ts`、`lib/tts.js`、`lib/tts.d.ts`、`package.json` 逐个覆盖并 sha256 与源码仓库核对一致。
+- 发布包：`D:\NapCat\releases\dsh-napcat-0.3.23-xb.16.tgz`（解压后 `lib/config.js`、`lib/tts.js`、`package.json` sha256 与安装目录一致）。
+- **未重启 DSH、未重载插件、未动 9880 的 TTS 服务**，需重载插件后插件侧默认值才生效；服务端 legacy 映射可保证重载前仍在用旧 g4 路径的请求也已走银月音色。
+- 残留：`src/sing.ts` 唱歌的音色转换 target 仍是 `D:/NapCat/tts/refs/user/u3.wav`，本次未改（唱歌链路未验证）。
