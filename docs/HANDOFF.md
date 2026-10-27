@@ -160,3 +160,26 @@
 - 发布包：`D:\NapCat\releases\dsh-napcat-0.3.23-xb.16.tgz`（解压后 `lib/config.js`、`lib/tts.js`、`package.json` sha256 与安装目录一致）。
 - **未重启 DSH、未重载插件、未动 9880 的 TTS 服务**，需重载插件后插件侧默认值才生效；服务端 legacy 映射可保证重载前仍在用旧 g4 路径的请求也已走银月音色。
 - 残留：`src/sing.ts` 唱歌的音色转换 target 仍是 `D:/NapCat/tts/refs/user/u3.wav`，本次未改（唱歌链路未验证）。
+
+## 修复：音色预设与切换（0.3.23-xb.17，2026-10-27）
+
+**背景**：用户要求保存两个可切换的音色，名字固定 **原版**（最初的 u3 音色）与 **银月**（当前默认），随时能切，不需要改配置或重载插件。
+
+**关键设计（为什么原版不能直接用 u3.wav）**：`D:\NapCat\tts\tts_server.py` 的 `synth()` 开头有一段 legacy 兼容映射——`voice` 为空或 basename 落在 `u3.wav / user_ref_new.wav / user_ref_dereverb_g4.wav / raw_thin2.wav / raw_clean.wav` 里时，强制替换成 `DEFAULT_VOICE`（`yinyue_ref_n24.wav` = 银月），并强制 `PRESET_EMO / PRESET_ALPHA`。这段是给「插件没重载、旧进程还在传 u3.wav」兜底的，**不能删也不能改名单**。所以「原版」另存一份：`python -c soundfile` 读 `refs/user/u3.wav`（24000Hz 单声道 7.7s，峰值 0.4839）→ 重采样 44100Hz 单声道 PCM_16 写成 `refs/user/original_ref.wav`（峰值仍 0.4839，未触顶 0.95 故未归一）。文件名不在 legacy 名单里，能被正常使用。
+
+**改动**：
+
+- 新增 `src/ttsvoice.ts`：`resolveVoiceRef(config)` 按「运行时覆盖 > `ttsVoices[ttsVoice]` > `ttsVoiceRef`」解析参考音频，全空时兜底 `yinyue_ref_n24.wav`；`setVoiceOverride(name)` / `resetVoiceOverride()` / `currentVoiceName(config)`。覆盖是模块级变量，只在进程内有效，重启回到配置的 `ttsVoice`。
+- `src/config.ts`：新增 `ttsVoices: z.dict(z.string())`（默认 `{原版: original_ref.wav, 银月: yinyue_ref_n24.wav}`，volatile）与 `ttsVoice: string`（默认 `银月`）；`ttsVoiceRef` 保留作为旧配置兜底，描述补一句「优先用 ttsVoices」。`DEFAULTS` 同步。
+- `src/tts.ts`：请求参数 `voice` 从 `String(config.ttsVoiceRef ?? '')` 改为 `resolveVoiceRef(config)`。
+- `src/sing.ts`：音色转换 target 同样改为 `resolveVoiceRef(config)`（替代原先读 `ttsVoiceRef` 的写法），唱歌跟随同一个音色。
+- `src/tools.ts`：新增工具 `napcat_voice`（`action: list|switch`，`name` 可选）。`list` 回「当前：银月。可选：原版、银月」；`switch` 必须命中预设键，否则报错并列出可选值；未注入 `getConfig` 时退回 `DEFAULTS`。
+- `src/bridge.ts`：`TEXT_REPLY_RULES` 加一句——换音色直接调 `napcat_voice`，不让用户自己改配置。
+
+**版本**：`package.json` → `0.3.23-xb.17`；`README.md` 版本行同步；`dsh.plugin.json` 的 `version` 沿用 `0.3.23`（该文件自 xb.6 起只记基础版本，历次 xb 增量不动它）。
+
+**验证**：`npm run build` 通过；`npm test` → **111 tests, 111 pass, 0 fail**（基线 109 未删未改，新增 `test/voice-preset.test.mjs` 2 条：解析优先级、`napcat_voice` 的 list/switch/非法名）。
+
+**音色实测（服务端 9880 未改未重启）**：同一句「你好，我是小白，今天天气不错。」分别用两个参考合成，librosa.pyin(80–600Hz) 测 F0 中位数——`original_ref.wav` 样本 **354.0Hz**（6.46s）、`yinyue_ref_n24.wav` 样本 **267.5Hz**（4.22s）；参考音频本身分别 339.0Hz / 285.9Hz。两条音色差异明确，原版不再被 legacy 映射吃掉。
+
+**部署**：运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\` 覆盖 `lib/ttsvoice.js`、`lib/ttsvoice.d.ts`、`lib/config.*`、`lib/tts.*`、`lib/sing.*`、`lib/tools.*`、`lib/bridge.*`、`package.json`、`README.md` 并逐个 sha256 核对；发布包 `D:\NapCat\releases\dsh-napcat-0.3.23-xb.17.tgz`。**未重启 DSH、未重载插件、未动 9880 服务**——插件侧新逻辑需重载后才生效。

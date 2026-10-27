@@ -14,6 +14,7 @@ import type { Config } from './config.js'
 import { ensureTempDir } from './media.js'
 import { withGpu } from './gpu.js'
 import type { LogLevel } from './onebot.js'
+import { resolveVoiceRef } from './ttsvoice.js'
 
 type Log = (level: LogLevel, message: string) => void
 
@@ -111,7 +112,7 @@ async function synthesizeAttempt(
   const url = String(config.ttsServerUrl ?? '').replace(/\/+$/, '')
   const query = new URLSearchParams({
     text,
-    voice: String(config.ttsVoiceRef ?? ''),
+    voice: resolveVoiceRef(config),
     lang: 'ZH',
     emo,
     alpha: '0.45',

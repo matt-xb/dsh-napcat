@@ -86,6 +86,10 @@ export interface Config {
   voiceTimeoutMs: number
   ttsEnabled: boolean
   ttsServerUrl: string
+  /** 音色预设：名字 → 参考音频绝对路径。 */
+  ttsVoices: Record<string, string>
+  /** 当前使用的音色预设名。 */
+  ttsVoice: string
   ttsVoiceRef: string
   ttsSpeed: number
   ttsEmotion: string
@@ -179,7 +183,12 @@ export const Config: Z<Config> = z.object({
   voiceTimeoutMs: z.natural().default(30000).description('单条语音识别超时（毫秒），超时回退 [语音]').volatile(),
   ttsEnabled: z.boolean().default(true).description('发语音：开启 napcat_send_voice（本机 TTS 服务）').volatile(),
   ttsServerUrl: z.string().default('http://127.0.0.1:9880').description('本机 TTS 服务地址').volatile(),
-  ttsVoiceRef: z.string().default('D:/NapCat/tts/refs/user/yinyue_ref_n24.wav').description('音色参考音频绝对路径').volatile(),
+  ttsVoices: z.dict(z.string()).default({
+    '原版': 'D:/NapCat/tts/refs/user/original_ref.wav',
+    '银月': 'D:/NapCat/tts/refs/user/yinyue_ref_n24.wav',
+  }).description('音色预设：名字 → 参考音频绝对路径').volatile(),
+  ttsVoice: z.string().default('银月').description('当前使用的音色预设名（可用 napcat_voice 切换）').volatile(),
+  ttsVoiceRef: z.string().default('D:/NapCat/tts/refs/user/yinyue_ref_n24.wav').description('音色参考音频绝对路径（旧配置兜底，优先用 ttsVoices）').volatile(),
   ttsSpeed: z.number().default(1.0).description('语速（1=原速，越大越快）').volatile(),
   ttsEmotion: z.string().default('calm').description('默认情绪：happy/angry/sad/afraid/disgusted/melancholic/surprised/calm').volatile(),
   ttsTimeoutMs: z.natural().default(30000).description('单条语音合成超时（毫秒）').volatile(),
@@ -247,6 +256,11 @@ export const DEFAULTS: Config = {
   voiceTimeoutMs: 30000,
   ttsEnabled: true,
   ttsServerUrl: 'http://127.0.0.1:9880',
+  ttsVoices: {
+    '原版': 'D:/NapCat/tts/refs/user/original_ref.wav',
+    '银月': 'D:/NapCat/tts/refs/user/yinyue_ref_n24.wav',
+  },
+  ttsVoice: '银月',
   ttsVoiceRef: 'D:/NapCat/tts/refs/user/yinyue_ref_n24.wav',
   ttsSpeed: 1.0,
   ttsEmotion: 'calm',

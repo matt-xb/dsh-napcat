@@ -83,6 +83,10 @@ export interface Config {
     voiceTimeoutMs: number;
     ttsEnabled: boolean;
     ttsServerUrl: string;
+    /** 音色预设：名字 → 参考音频绝对路径。 */
+    ttsVoices: Record<string, string>;
+    /** 当前使用的音色预设名。 */
+    ttsVoice: string;
     ttsVoiceRef: string;
     ttsSpeed: number;
     ttsEmotion: string;

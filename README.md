@@ -13,7 +13,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 自己维护的一份实现：功能按需长，结构保持薄（连接层 / 会话桥 / 工具 / 配置四块，互不缠绕）。
 
-**当前分支版本 v0.3.23-xb.16（预发布，实机验收待完成）**。
+**当前分支版本 v0.3.23-xb.17（预发布，实机验收待完成）**。
 
 普通闲聊默认一句短话，不展开分析接话意图；自动回复的短中文纯文本会合并换行。代码、列表、链接和长正文不做此压行处理，后台任务结果及显式文字工具不改写。短句要求由模型生成，不靠截断正文实现；实际效果需重载后的QQ聊天验收。
 
@@ -27,6 +27,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 - **单一文字出口与隐私过滤**：保留已成功文字工具发送接管最终回复的修复；自动回复只取本轮最后正式模型答复，不把压缩历史等工具步骤的文字拼进同一气泡，新一步没有正式答复时也不回退旧草稿。过滤内部上下文、宿主通知、过期/中断输出，保持后续新轮可正常回复。群引用媒体必须属于当前群；按发送者、@和引用区分对话对象。模型复述的宿主 runtime context（`Time sampled while preparing turn …` 那一块）在同一出口按整块剥掉，其余正文不动；剥完为空就不发这条消息。同一出口还剥掉模型当正文吐出的包装标签（`</output>`、`<result>`、`<!-- … -->` 等，代码块和行内反引号内不动）和写成文字发出来的本地媒体 markdown/绝对路径。
 - **媒体送达即本轮完成**：图、文件、语音、唱歌任一条真正发到 QQ 后，桥就记本轮已有输出，不再补发模型写的「已发图」这类结尾确认句；任务回执链路不受影响。
 - **投递看门狗覆盖所有会话**：每条消息投递后都起 10s 看门狗，没有 turn/start 且没有任何会话事件就换新会话重投一次（含新建会话，典型是被归档）；turn/start 到达即撤盾。会话正在跑一轮时排队的新消息不设盾，避免长工具被误判成没执行。
+- **音色预设与运行时切换**：`ttsVoices` 保存「原版 / 银月」两套参考音频，`ttsVoice` 记当前预设；`napcat_voice` 可在聊天里直接 `list` / `switch`，运行时覆盖优先于配置，重启后回到配置值。合成与唱歌走同一个解析函数（覆盖 > 预设 > 旧 `ttsVoiceRef`），旧配置不用改也能继续用。
 - **TTS 服务自愈启动**：`napcat_send_voice` 遇到连接被拒（ECONNREFUSED / fetch failed）且 `ttsAutoStart` 为开时，用 `child_process.spawn` 以 `detached` + 日志重定向 + `unref()` 拉起本机 `tts_server.py`，500ms 轮询 `/health`（最多 90 秒）等 `loaded` 后重试一次合成；再失败仍按原报错走文字。并发请求共用同一个模块级 Promise，只起一个进程；启动器路径先做存在性检查，不存在就跳过自愈，绝不把插件搞崩。
 - **生图硬规则进插件提示词**：要出图一律 `image_generate`，原图当参考图整张直出，中文文案由模型直接写；禁止 Pillow/OpenCV 抠图拼图叠字调色，只有画乱码才重生成。
 - **表情优先，不设比例**：有合适的已审核图时优先图，表达不了才文字；`napcat_find_sticker` 仅搜索配置的本地图库，成功发送才写本聊天图片历史。按词面/同义词匹配分数每两分划一层，同层未使用及最久没发的图优先；全部用过后仍轮换，不再只是轻微扣分。不能为了轮换发错情绪。图库内容需自行审核；本仓库不附带私人表情、聊天记录或第三方图片。
@@ -329,6 +330,8 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `agentPreset` | `''` | 会话使用的 preset（留空=宿主默认） |
 | `provider` / `model` | `''` | 覆盖模型（留空=宿主默认模型） |
 | `logLevel` | `info` | `debug` 看投递/图片细节 |
+| `ttsVoices` | `{原版: …/original_ref.wav, 银月: …/yinyue_ref_n24.wav}` | 音色预设：名字 → 参考音频绝对路径（`原版` 走 `original_ref.wav`，因为服务端 legacy 名单会把 `u3.wav` 强制映射成银月） |
+| `ttsVoice` | `银月` | 当前使用的音色预设名（模型可用 `napcat_voice` 运行时切换，不必改配置） |
 | `ttsAutoStart` | `true` | TTS 服务没起时自动拉起（仅本机；连不上 9880 时用 `NAPCAT_TTS_PYTHON`（默认 `D:\NapCat\tts\index-tts\.venv\Scripts\python.exe`）配 `NAPCAT_TTS_SERVER`（默认 `D:\NapCat\tts\tts_server.py`）启动，轮询 `/health` 最多 90 秒后重试一次，日志写 `D:\NapCat\tts\logs\tts_server.out`；路径不存在则跳过自愈按原样报错） |
 
 ## 工具（agent 可调用）
@@ -341,6 +344,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `napcat_send_file` | 发文件（`file` 段 → 退回 `upload_*_file`） |
 | `napcat_send_voice` | 发语音（本机 TTS 合成后发 `record` 段；可传 `emotion`） |
 | `napcat_sing` | 唱歌（三行简谱 → 离线歌声合成 → 音色转换 → 发 `record` 段；整链独占显存） |
+| `napcat_voice` | 查看/切换语音音色预设（`action=list\|switch`，`switch` 需 `name`，如 `原版` / `银月`） |
 | `napcat_list_group_files` | 列群文件（`get_group_root_files` / `get_group_files_by_folder`，可按关键字过滤） |
 | `napcat_fetch_group_file` | 下载群文件（**模糊文件名**；多个同分返回候选清单） |
 | `napcat_memory_space` | 把本群 mnemon 记忆空间 id 登记给插件（插件缓存后自动带入上下文） |
