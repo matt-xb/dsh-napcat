@@ -75,18 +75,18 @@ let pending = 0
 const MAX_PENDING = 2
 
 /** 合成一段语音到临时 wav，返回绝对路径；失败/超时返回 null（不抛）。 */
-export function synthesizeToWav(text: string, config: Config, log: Log, deps: TtsDeps = {}): Promise<string | null> {
+export function synthesizeToWav(text: string, config: Config, log: Log, deps: TtsDeps = {}, chatKey?: string): Promise<string | null> {
   if (config.ttsEnabled === false) return Promise.resolve(null)
   if (pending >= MAX_PENDING) {
     log('warn', 'TTS 排队已满（' + pending + ' 条），跳过: ' + text.slice(0, 20))
     return Promise.resolve(null)
   }
   pending += 1
-  return withGpu(() => synthesizeOnce(text, config, log, deps)).finally(() => { pending -= 1 })
+  return withGpu(() => synthesizeOnce(text, config, log, deps, chatKey)).finally(() => { pending -= 1 })
 }
 
-async function synthesizeOnce(text: string, config: Config, log: Log, deps: TtsDeps): Promise<string | null> {
-  const first = await synthesizeAttempt(text, config, log, deps)
+async function synthesizeOnce(text: string, config: Config, log: Log, deps: TtsDeps, chatKey?: string): Promise<string | null> {
+  const first = await synthesizeAttempt(text, config, log, deps, chatKey)
   if (first.wav !== null || first.error === undefined) return first.wav
   if (!isConnectionError(first.error)) return null
   if (config.ttsAutoStart === false) {
@@ -95,7 +95,7 @@ async function synthesizeOnce(text: string, config: Config, log: Log, deps: TtsD
   }
   if (!(await ensureTtsServer(config, log, deps))) return null
   log('info', 'TTS 服务已就绪，重试合成: ' + text.slice(0, 20))
-  return (await synthesizeAttempt(text, config, log, deps)).wav
+  return (await synthesizeAttempt(text, config, log, deps, chatKey)).wav
 }
 
 async function synthesizeAttempt(
@@ -103,6 +103,7 @@ async function synthesizeAttempt(
   config: Config,
   log: Log,
   deps: TtsDeps,
+  chatKey?: string,
 ): Promise<{ wav: string | null; error?: unknown }> {
   const emo = emotionVector(config.ttsEmotion)
   if (emo === undefined) {
@@ -112,7 +113,7 @@ async function synthesizeAttempt(
   const url = String(config.ttsServerUrl ?? '').replace(/\/+$/, '')
   const query = new URLSearchParams({
     text,
-    voice: resolveVoiceRef(config),
+    voice: resolveVoiceRef(config, chatKey),
     lang: 'ZH',
     emo,
     alpha: '0.45',

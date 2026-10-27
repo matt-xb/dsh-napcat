@@ -29,5 +29,5 @@ export interface SingResult {
  */
 export declare function parseScore(raw: unknown): Score;
 /** 唱一首歌，返回 { wav, audioSec }；串行占用显存，失败抛 Error。 */
-export declare function synthesizeSing(scoreText: string, config: Config, log: Log): Promise<SingResult>;
+export declare function synthesizeSing(scoreText: string, config: Config, log: Log, chatKey?: string): Promise<SingResult>;
 export {};

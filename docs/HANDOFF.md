@@ -183,3 +183,34 @@
 **音色实测（服务端 9880 未改未重启）**：同一句「你好，我是小白，今天天气不错。」分别用两个参考合成，librosa.pyin(80–600Hz) 测 F0 中位数——`original_ref.wav` 样本 **354.0Hz**（6.46s）、`yinyue_ref_n24.wav` 样本 **267.5Hz**（4.22s）；参考音频本身分别 339.0Hz / 285.9Hz。两条音色差异明确，原版不再被 legacy 映射吃掉。
 
 **部署**：运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\` 覆盖 `lib/ttsvoice.js`、`lib/ttsvoice.d.ts`、`lib/config.*`、`lib/tts.*`、`lib/sing.*`、`lib/tools.*`、`lib/bridge.*`、`package.json`、`README.md` 并逐个 sha256 核对；发布包 `D:\NapCat\releases\dsh-napcat-0.3.23-xb.17.tgz`。**未重启 DSH、未重载插件、未动 9880 服务**——插件侧新逻辑需重载后才生效。
+
+## 修复：音色按会话隔离（0.3.23-xb.18，2026-10-27）
+
+**为什么改**：xb.17 的 `src/ttsvoice.ts` 用模块级 `let override: string | undefined` 存运行时音色，`napcat_voice` 一 switch，整个进程所有私聊 + 所有群一起变。用户实测指出「不能你一切换所有群和私聊都切换了」，要求私聊 A 用银月、群 B 用原版各管各的。
+
+**改法**：覆盖从「一个全局变量」换成 `Map<chatKey, 预设名>`，chatKey 形如 `private:993484108` / `group:123456789`。
+
+**优先级**（`currentVoiceName(config, chatKey)` / `resolveVoiceRef(config, chatKey)` 同一套）：该 chatKey 的覆盖 > `ttsVoices[config.ttsVoice]` > `ttsVoiceRef` > 内置兜底 `yinyue_ref_n24.wav`。chatKey 为空串/undefined 时跳过覆盖这一层，保持原来「全默认」行为（老调用方不受影响）。
+
+**持久化**：新增 `src/voicestore.ts`，把这张表写到 `<workspacePath>/voice-presets.json`（`join(config.workspacePath || process.cwd(), 'voice-presets.json')`，与 memory 根同一基准）。格式就是一张扁平对象：
+
+```json
+{"private:993484108":"银月","group:123456789":"原版"}
+```
+
+首次调用时懒加载一次（读不到当空；文件损坏只 `warn` 不抛；换 workspacePath 才重读）。写入先写 `voice-presets.json.tmp` 再 `rename`，保证原子性，不会留下半个文件。导出 `loadVoiceStore(config,log)` / `saveVoiceStore(config,log,map)` / `setStoredVoice(config,log,chatKey,name)` / `getStoredVoice(chatKey)` / `resetVoiceStore()`（测试清缓存）。
+
+**为什么内存表放在 ttsvoice.ts**：`voiceOverrides` 是全局唯一一份，`voicestore` 只负责它的读写盘；否则两边各有一张 map 会互相看不见。
+
+**改动**：
+
+- `src/ttsvoice.ts`：`setVoiceOverride(chatKey,name)` / `getVoiceOverride(chatKey)` / `resetVoiceOverride(chatKey?)`（无参清全部）；`currentVoiceName`、`resolveVoiceRef` 加 `chatKey?` 参数。
+- `src/voicestore.ts`（新增）：上述持久化。
+- `src/tts.ts`：`synthesizeToWav(text, config, log, deps = {}, chatKey?)`，一路透传到 `resolveVoiceRef(config, chatKey)`；`TtsDeps` 不变。
+- `src/sing.ts`：`synthesizeSing(scoreText, config, log, chatKey?)` 同样透传，唱歌跟随本会话音色。
+- `src/tools.ts`：`napcat_voice` 新增可选 `chat_id`（省略=当前会话，走 `resolveChat`）；`list` 回「当前会话 <chatKey> 的音色：X。可选：原版、银月」；`switch` 用 `setStoredVoice` 写该会话并落盘，回「已把 <chatKey> 切换到 X」；`napcat_send_voice`/`napcat_sing` 合成时传 `target.kind + ':' + target.id`；工具描述补「切换只影响当前这个会话」。
+- `src/bridge.ts`：提示词「换音色直接调 napcat_voice」后补「只影响当前这个会话」。
+
+**验证**：`npm run build` 通过；`npm test` → **114 tests, 114 pass, 0 fail**（基线 111 未删未改，新增 `test/voice-scope.test.mjs` 3 条：两个 chatKey 各自 switch 互不影响、写盘后清内存能读回、未设覆盖回落 `config.ttsVoice`）。`test/voice-preset.test.mjs` 只做签名适配（`setVoiceOverride(KEY,…)`、`resolveVoiceRef(config,KEY)`、`synthesizeToWav(...,KEY)`、`napcat_voice` 带 `chat_id`），断言原样保留。
+
+**部署**：运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\` 同步 lib/*.js、lib/*.d.ts、package.json、README.md 并逐个 sha256 核对；发布包 `D:\NapCat\releases\dsh-napcat-0.3.23-xb.18.tgz`。**未重启 DSH、未重载插件、未动 9880 服务**——新逻辑需重载后才生效。

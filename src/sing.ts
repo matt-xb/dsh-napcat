@@ -68,11 +68,11 @@ export function parseScore(raw: unknown): Score {
 }
 
 /** 唱一首歌，返回 { wav, audioSec }；串行占用显存，失败抛 Error。 */
-export function synthesizeSing(scoreText: string, config: Config, log: Log): Promise<SingResult> {
-  return withGpu(() => singOnce(scoreText, config, log))
+export function synthesizeSing(scoreText: string, config: Config, log: Log, chatKey?: string): Promise<SingResult> {
+  return withGpu(() => singOnce(scoreText, config, log, chatKey))
 }
 
-async function singOnce(scoreText: string, config: Config, log: Log): Promise<SingResult> {
+async function singOnce(scoreText: string, config: Config, log: Log, chatKey?: string): Promise<SingResult> {
   const score = parseScore(scoreText)
   const dir = await ensureTempDir()
   const stem = 'sing-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
@@ -95,7 +95,7 @@ async function singOnce(scoreText: string, config: Config, log: Log): Promise<Si
     const matched = /"audio_sec":\s*([0-9.]+)/.exec(svs.stdout)
     const audioSec = matched?.[1] === undefined ? undefined : Number(matched[1])
 
-    const targetVoice = resolveVoiceRef(config)
+    const targetVoice = resolveVoiceRef(config, chatKey)
     log('debug', '唱歌：音色转换 → ' + targetVoice)
     const tSvc = Date.now()
     await runStep('音色转换', SVC_PY, [

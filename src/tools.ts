@@ -12,7 +12,8 @@ import type { Config } from './config.js'
 import { DEFAULTS } from './config.js'
 import { synthesizeToWav } from './tts.js'
 import { synthesizeSing } from './sing.js'
-import { currentVoiceName, setVoiceOverride } from './ttsvoice.js'
+import { currentVoiceName } from './ttsvoice.js'
+import { loadVoiceStore, setStoredVoice } from './voicestore.js'
 import type { ObFriendInfo, ObGroupInfo, ObMessage } from './types.js'
 
 /** 允许通过 napcat_api 透传的动作白名单（只读 + 发消息，避免模型乱调用管理类动作）。 */
@@ -366,7 +367,7 @@ export function registerTools(
       const settings = typeof input.emotion === 'string' && input.emotion.trim() !== ''
         ? { ...config, ttsEmotion: input.emotion.trim() }
         : config
-      const wav = await synthesizeToWav(text, settings, log)
+      const wav = await synthesizeToWav(text, settings, log, {}, target.kind + ':' + target.id)
       if (wav === null) {
         throw new Error('语音合成失败：TTS 服务不可用或超时（' + String(config.ttsServerUrl) + '），改用文字发送')
       }
@@ -405,7 +406,7 @@ export function registerTools(
       if (config === undefined || config.singEnabled === false) throw new Error('唱歌未开启（配置 singEnabled=false）')
       let sung
       try {
-        sung = await synthesizeSing(score, config, log)
+        sung = await synthesizeSing(score, config, log, target.kind + ':' + target.id)
       } catch (error) {
         throw new Error('唱歌失败：' + (error instanceof Error ? error.message : String(error)))
       }
@@ -426,28 +427,33 @@ export function registerTools(
   }))
   ctx.tools.register(defineTool({
     name: 'napcat_voice',
-    description: '查看或切换语音（TTS）音色预设。用户说「换成原版」「换回银月」这类要求时直接调本工具，不要让他改配置。action=list 看当前音色和可选值；action=switch 需要 name。',
+    description: '查看或切换语音（TTS）音色预设。用户说「换成原版」「换回银月」这类要求时直接调本工具，不要让他改配置。切换只影响当前这个会话（私聊和每个群各自独立），可用 chat_id 指定别的会话。action=list 看当前音色和可选值；action=switch 需要 name。',
     parameters: {
       action: { type: 'string', required: true, description: 'list=查看当前音色与可选预设；switch=切换' },
       name: { type: 'string', description: 'switch 时必填：预设名（如 原版 / 银月）' },
+      chat_id: { type: 'string', description: '可选：目标会话，private:<QQ号> 或 group:<群号>；省略=当前会话' },
     },
     output: textOutput(),
     isConcurrencySafe: () => true,
-    execute: async args => {
-      const input = args as { action?: string; name?: string }
+    execute: async (args, exec) => {
+      const input = args as { action?: string; name?: string; chat_id?: string }
       const config = deps.getConfig?.() ?? DEFAULTS
       const names = Object.keys(config.ttsVoices ?? {})
+      const target = resolveChat(input.chat_id, exec)
+      const chatKey = target.kind + ':' + target.id
       const action = String(input.action ?? '').trim()
+      await loadVoiceStore(config, log)
       if (action === 'list') {
-        return '当前：' + (currentVoiceName(config) || '（未设置）') + '。可选：' + (names.length === 0 ? '（无预设）' : names.join('、'))
+        const current = currentVoiceName(config, chatKey) || '（未设置）'
+        return '当前会话 ' + chatKey + ' 的音色：' + current + '。可选：' + (names.length === 0 ? '（无预设）' : names.join('、'))
       }
       if (action !== 'switch') throw new Error('action 应为 list 或 switch，收到: ' + action)
       const name = String(input.name ?? '').trim()
       if (name === '') throw new Error('切换音色需要 name，可选：' + names.join('、'))
       if (!names.includes(name)) throw new Error('没有音色「' + name + '」，可选：' + names.join('、'))
-      setVoiceOverride(name)
-      log('info', '音色切换到 ' + name)
-      return '已切换到 ' + name
+      await setStoredVoice(config, log, chatKey, name)
+      log('info', '音色切换到 ' + name + '（' + chatKey + '）')
+      return '已把 ' + chatKey + ' 切换到 ' + name
     },
   }))
   const allowedGroups = deps.allowedGroups
