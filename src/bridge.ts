@@ -71,6 +71,8 @@ interface ChatState {
   outputBlocked?: boolean
   toolTexts?: Set<string>
   toolTextComplete?: boolean
+  /** 本轮已成功发出去的内容；模型在同轮重复调同一个发送工具时挡掉第二次。 */
+  sentKeys?: Set<string>
   /** 只出现在工具步骤里、轮末被丢掉的模型正文（漏发告警用）。 */
   droppedText?: string
   /** Snapshots are queued with followups, never replaced by a later inbound image. */
@@ -761,6 +763,17 @@ export class Bridge {
     chat.toolTextComplete = true
   }
 
+  /** 同轮同会话同内容只放行一次；发送失败由调用方 release，真错误仍能重试。 */
+  claimSendOnce(sessionId: string, chatKey: string, contentKey: string): { status: 'claimed'; release: () => void } | { status: 'repeat' } | { status: 'untracked' } {
+    if (this.bySession.get(sessionId) !== chatKey) return { status: 'untracked' }
+    const chat = this.chats.get(chatKey)
+    if (!chat?.outputActive || contentKey === '') return { status: 'untracked' }
+    chat.sentKeys ??= new Set<string>()
+    if (chat.sentKeys.has(contentKey)) return { status: 'repeat' }
+    chat.sentKeys.add(contentKey)
+    return { status: 'claimed', release: () => { chat.sentKeys?.delete(contentKey) } }
+  }
+
   trackTextSend(sessionId: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined {
     if (this.bySession.get(sessionId) !== chatKey) return undefined
     const chat = this.chats.get(chatKey)
@@ -1407,6 +1420,7 @@ export class Bridge {
       chat.outputBlocked = false
       chat.toolTexts = new Set()
       chat.toolTextComplete = false
+      chat.sentKeys = new Set()
       chat.droppedText = undefined
       chat.buffer = []
       return

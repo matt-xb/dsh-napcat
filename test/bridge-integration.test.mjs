@@ -25,6 +25,7 @@ function fixture(kind = 'group') {
   registerTools(ctx, conn, () => {}, {
     keyForSession: id => b.keyForSession(id), trackTextSend: (id, key) => b.trackTextSend(id, key),
     targetAllowed: (id, key) => b.taskTargetAllowed(id, key),
+    claimSendOnce: (id, key, contentKey) => b.claimSendOnce(id, key, contentKey),
     taskMediaReceiver: (id, key) => b.taskMediaReceiver(id, key),
   })
   const emit = (type, data) => b.onSessionEvent(agent.session, { type, data })
@@ -135,6 +136,30 @@ test('frontend media delivery does not suppress its normal final text', async t 
   assert.equal(f.sent.length, 2)
   assert.equal(f.sent[0].params.message[0].type, 'image')
   assert.equal(f.sent[1].params.message[0].data.text, 'frontend final result')
+})
+
+test('same text sent twice in one turn is sent once; next turn may send it again', async () => {
+  const f = fixture(); f.start(1)
+  const send = f.tools.get('napcat_send_message')
+  await send.execute({ chat_id: f.key, text: '只发一条' }, f.exec)
+  // 模型在下一步重新生成同一个调用（只差 chat_id）——必须被拦下
+  await assert.rejects(send.execute({ chat_id: f.key, text: '只发一条' }, f.exec), /重复发送/)
+  assert.equal(f.sent.length, 1)
+  f.end(1); await tick()
+  f.start(2)
+  await send.execute({ chat_id: f.key, text: '只发一条' }, f.exec)
+  assert.equal(f.sent.length, 2)
+})
+
+test('send failure releases the claim so a real retry still goes out', async () => {
+  const f = fixture(); f.start(1)
+  const send = f.tools.get('napcat_send_message')
+  let fail = true
+  const real = f.conn.call
+  f.conn.call = async (action, params) => { if (fail) { fail = false; throw new Error('result": 120') } return real(action, params) }
+  await assert.rejects(send.execute({ chat_id: f.key, text: '重试一次' }, f.exec), /120/)
+  await send.execute({ chat_id: f.key, text: '重试一次' }, f.exec)
+  assert.equal(f.sent.length, 1)
 })
 
 test('accepted input is persisted before chat creation and current words participate in recall', async () => {

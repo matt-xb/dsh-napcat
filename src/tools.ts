@@ -6,7 +6,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 import { isHttpUrl, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_IMAGE_BYTES, downloadToFile, ensureTempDir, localToBase64Url, sourceToBase64Url } from './media.js'
 import { rankByFileName } from './text.js'
-import { sanitizeOutgoingMessage, sanitizeReply, segmentsOf, splitText } from './text.js'
+import { sanitizeOutgoingMessage, sanitizeReply, segmentsOf, splitText, replyDedupKey } from './text.js'
 import { findStickers } from './stickers.js'
 import type { Config } from './config.js'
 import { DEFAULTS } from './config.js'
@@ -55,6 +55,11 @@ export interface ToolDeps {
   trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined
   /** 媒体（图/文件/语音/歌）已送达：本轮输出算完成，桥不再补发结尾确认句。 */
   markOutputSent?: (sessionId: string, chatKey: string) => void
+  /**
+   * 同一轮同一会话同一内容只发一次：模型常在上一步成功后重新生成同一个发送调用。
+   * 'claimed'=可以发（发送失败要 release 掉，允许真错误重试）；'repeat'=本轮已发过；'untracked'=不在活跃轮次。
+   */
+  claimSendOnce?: (sessionId: string, chatKey: string, contentKey: string) => { status: 'claimed'; release: () => void } | { status: 'repeat' } | { status: 'untracked' }
   taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: { kind: 'image' | 'file'; url: string; name: string; caption?: string }) => Promise<void>) | undefined
   recordImageSend?: (chatKey: string, source: string, name: string) => Promise<void>
   recentImages?: (chatKey: string) => Promise<string[]>
@@ -100,6 +105,17 @@ export function registerTools(
     deps.markOutputSent?.(String((exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
   }
 
+  /**
+   * 同轮同会话同内容只发一次：模型常在工具成功后重生成同一个调用（参数只差 chat_id）。
+   * 重复的直接拒绝；返回 release，真发送失败时调用，允许下一轮/下一次正常重试。
+   */
+  const claimOnce = (exec: unknown, chatKey: string, contentKey: string): () => void => {
+    const sessionId = (exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id
+    const claim = deps.claimSendOnce?.(String(sessionId ?? ''), chatKey, contentKey)
+    if (claim?.status === 'repeat') throw new Error('本轮已经给 ' + chatKey + ' 发过同样的内容，本次重复发送已拦下（不要重发，继续下一步或沉默）')
+    return claim?.status === 'claimed' ? claim.release : () => {}
+  }
+
   const sendSegments = async (
     target: { kind: 'private' | 'group'; id: string },
     message: Array<Record<string, unknown>>,
@@ -131,24 +147,30 @@ export function registerTools(
       if (clean === null) throw new Error('拒绝外发内部上下文或模型通知')
       const chunks = splitText(clean, 1200)
       if (chunks.length === 0) throw new Error('空消息不外发')
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'text|' + replyDedupKey(clean.trim()))
       const sent = deps.trackTextSend?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
       const ids: string[] = []
-      for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index]
-        if (chunk === undefined) continue
-        const message: Array<Record<string, unknown>> = []
-        if (index === 0 && typeof input.quote_message_id === 'string' && input.quote_message_id !== '') {
-          message.push({ type: 'reply', data: { id: input.quote_message_id } })
+      try {
+        for (let index = 0; index < chunks.length; index += 1) {
+          const chunk = chunks[index]
+          if (chunk === undefined) continue
+          const message: Array<Record<string, unknown>> = []
+          if (index === 0 && typeof input.quote_message_id === 'string' && input.quote_message_id !== '') {
+            message.push({ type: 'reply', data: { id: input.quote_message_id } })
+          }
+          message.push({ type: 'text', data: { text: chunk } })
+          checkTarget(exec, target.kind + ':' + target.id)
+          const result = await conn.call<{ message_id?: number | string }>('send_msg', {
+            message_type: target.kind,
+            ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
+            message,
+          })
+          await sent?.(chunk)
+          if (result?.message_id !== undefined) ids.push(String(result.message_id))
         }
-        message.push({ type: 'text', data: { text: chunk } })
-        checkTarget(exec, target.kind + ':' + target.id)
-        const result = await conn.call<{ message_id?: number | string }>('send_msg', {
-          message_type: target.kind,
-          ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
-          message,
-        })
-        await sent?.(chunk)
-        if (result?.message_id !== undefined) ids.push(String(result.message_id))
+      } catch (error) {
+        release()
+        throw error
       }
       await sent?.(clean, true)
       log('info', '工具发送 ' + input.chat_id + ' (' + chunks.length + ' 段)')
@@ -223,8 +245,18 @@ export function registerTools(
       if (sending) params.message = sanitizeOutgoingMessage(params.message)
       const segments = sending ? segmentsOf(params.message as ObMessage) : []
       const pureText = segments.length > 0 && segments.every(seg => seg.type === 'text' || seg.type === 'reply')
+      const pureTextBody = pureText ? segments.filter(seg => seg.type === 'text').map(seg => String(seg.data?.text ?? '')).join('') : ''
+      const release = sending && pureText && pureTextBody.trim() !== ''
+        ? claimOnce(exec, targetKind + ':' + String(targetId), 'text|' + replyDedupKey(pureTextBody.trim()))
+        : () => {}
       const sent = pureText ? deps.trackTextSend?.(String(exec?.agent?.session?.id ?? ''), targetKind + ':' + String(targetId)) : undefined
-      const data = await conn.call<unknown>(input.action, params)
+      let data: unknown
+      try {
+        data = await conn.call<unknown>(input.action, params)
+      } catch (error) {
+        release()
+        throw error
+      }
       if (pureText) await sent?.(segments.filter(seg => seg.type === 'text').map(seg => String(seg.data?.text ?? '')).join(''), true)
       else if (sending) markSent(exec, { kind: targetKind as 'private' | 'group', id: String(targetId) })
       return JSON.stringify(data ?? null, null, 2)
@@ -271,13 +303,20 @@ export function registerTools(
         return '图片已登记交回主智能体检查，尚未发送QQ'
       }
       checkTarget(exec, target.kind + ':' + target.id)
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'image|' + input.source + '|' + (input.caption ?? ''))
       const image = await sourceToBase64Url(input.source, maxImageBytes)
       const message: Array<Record<string, unknown>> = []
       if (typeof input.caption === 'string' && input.caption.trim() !== '') {
         message.push({ type: 'text', data: { text: input.caption.trim() } })
       }
       message.push({ type: 'image', data: { file: image.url } })
-      const id = await sendSegments(target, message, exec)
+      let id: string | undefined
+      try {
+        id = await sendSegments(target, message, exec)
+      } catch (error) {
+        release()
+        throw error
+      }
       markSent(exec, target)
       try { await deps.recordImageSend?.(target.kind + ':' + target.id, input.source, image.name) }
       catch (error) { log('warn', '图片已送达但记录失败: ' + String(error)) }
@@ -309,6 +348,7 @@ export function registerTools(
       checkTarget(exec, target.kind + ':' + target.id)
       const file = await localToBase64Url(input.path, maxFileBytes)
       const displayName = typeof input.name === 'string' && input.name.trim() !== '' ? input.name.trim() : file.name
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'file|' + input.path + '|' + displayName)
       const errors: string[] = []
       // ① 先试文件消息段（部分 NapCat 版本支持 base64）
       try {
@@ -334,6 +374,7 @@ export function registerTools(
       } catch (error) {
         errors.push('上传接口失败: ' + (error instanceof Error ? error.message : String(error)))
       }
+      release()
       throw new Error('发送文件失败：' + errors.join('；') + '（NapCat 远端时文件消息支持有限，可先试发图片或将文件放到公共可访问 URL）')
     },
   }))
@@ -371,15 +412,22 @@ export function registerTools(
       if (wav === null) {
         throw new Error('语音合成失败：TTS 服务不可用或超时（' + String(config.ttsServerUrl) + '），改用文字发送')
       }
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'voice|' + text + '|' + (input.emotion ?? ''))
       const file = 'file:///' + wav.replace(/\\/g, '/')
       checkTarget(exec, target.kind + ':' + target.id)
-      const result = await conn.call<{ message_id?: number | string }>(
-        target.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
-        {
-          ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
-          message: [{ type: 'record', data: { file } }],
-        },
-      )
+      let result: { message_id?: number | string }
+      try {
+        result = await conn.call<{ message_id?: number | string }>(
+          target.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
+          {
+            ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
+            message: [{ type: 'record', data: { file } }],
+          },
+        )
+      } catch (error) {
+        release()
+        throw error
+      }
       const id = result?.message_id === undefined ? undefined : String(result.message_id)
       markSent(exec, target)
       log('info', '工具发语音 ' + target.kind + ':' + target.id + ' (' + text.length + ' 字)')
@@ -411,14 +459,21 @@ export function registerTools(
         throw new Error('唱歌失败：' + (error instanceof Error ? error.message : String(error)))
       }
       const file = 'file:///' + sung.wav.replace(/\\/g, '/')
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'sing|' + score)
       checkTarget(exec, target.kind + ':' + target.id)
-      const result = await conn.call<{ message_id?: number | string }>(
-        target.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
-        {
-          ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
-          message: [{ type: 'record', data: { file } }],
-        },
-      )
+      let result: { message_id?: number | string }
+      try {
+        result = await conn.call<{ message_id?: number | string }>(
+          target.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
+          {
+            ...(target.kind === 'group' ? { group_id: target.id } : { user_id: target.id }),
+            message: [{ type: 'record', data: { file } }],
+          },
+        )
+      } catch (error) {
+        release()
+        throw error
+      }
       const id = result?.message_id === undefined ? undefined : String(result.message_id)
       markSent(exec, target)
       log('info', '工具唱歌 ' + target.kind + ':' + target.id + '（' + (sung.audioSec ?? '?') + 's）')

@@ -9,6 +9,18 @@ export interface ToolDeps {
     trackTextSend?: (sessionId: string, chatKey: string) => ((text: string, complete?: boolean) => Promise<void>) | undefined;
     /** 媒体（图/文件/语音/歌）已送达：本轮输出算完成，桥不再补发结尾确认句。 */
     markOutputSent?: (sessionId: string, chatKey: string) => void;
+    /**
+     * 同一轮同一会话同一内容只发一次：模型常在上一步成功后重新生成同一个发送调用。
+     * 'claimed'=可以发（发送失败要 release 掉，允许真错误重试）；'repeat'=本轮已发过；'untracked'=不在活跃轮次。
+     */
+    claimSendOnce?: (sessionId: string, chatKey: string, contentKey: string) => {
+        status: 'claimed';
+        release: () => void;
+    } | {
+        status: 'repeat';
+    } | {
+        status: 'untracked';
+    };
     taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: {
         kind: 'image' | 'file';
         url: string;

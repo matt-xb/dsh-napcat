@@ -94,6 +94,15 @@ export declare class Bridge {
         caption?: string;
     }) => Promise<void>) | undefined;
     markOutputSent(sessionId: string, chatKey: string): void;
+    /** 同轮同会话同内容只放行一次；发送失败由调用方 release，真错误仍能重试。 */
+    claimSendOnce(sessionId: string, chatKey: string, contentKey: string): {
+        status: 'claimed';
+        release: () => void;
+    } | {
+        status: 'repeat';
+    } | {
+        status: 'untracked';
+    };
     trackTextSend(sessionId: string, chatKey: string): ((text: string, complete?: boolean) => Promise<void>) | undefined;
     private notifyTask;
     /** 把消息里的语音段换成转写文本段；开关关掉或识别失败时原样返回（toText 回退 [语音]）。 */
