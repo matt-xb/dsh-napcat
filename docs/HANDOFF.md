@@ -323,3 +323,37 @@
 **交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.25.tgz`（sha1 `abbd65a0657b54d83ee0ff5a7c9eb2fa6522464f`，132015 字节），已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（旧版备份 `backup-dsh-napcat-xb.24-20261030123756`），`npm install --legacy-peer-deps` 安装，`diff -r` 核对 tarball 的 `lib/`、`client/`、`package.json` 与安装目录一致，安装后 `require('dsh-napcat/package.json').version` = `0.3.23-xb.25`，`lib/text.js`、`lib/bridge.js` 与仓库源码构建产物逐字节相同。
 
 **未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里复现这次泄漏再验证修复**——真实效果要重载插件后由模型再出现同类幻觉才能确认；`stripDecisionPayload` 对「决策 JSON 夹在句子中间」是已知漏网点（shortcut 已标注）。
+
+## 出口收口：思考独白与控制标记残片（0.3.23-xb.26，2026-10-30）
+
+**现场**：2026-10-30 12:30 私聊连续两条异常。第一条在正文后面继续吐自我推演：
+
+「？？ 用户说"比如 ？？"，我回"？？"作为演示。 直接回。 ？？ 等等，我上一轮已经发过"……"，这轮发"？？"正好演示。就回。 ？？ 直接输出文字即可。？？」
+
+第二条只剩残渣：`</apc">!!!` 加三行 `!!!`。同一时段还出现过 `<|im_start|>` / `<|im_end|>` 与全角竖线写的 `｜｜DSML｜｜ invoke` 系列被逐字发出。
+
+**根因（用会话日志逐条证实，不是从现象倒推）**：
+
+- 会话日志 `C:\Users\Administrator\.dsh\sessions\--E-Documents-deepseek-harness-default-workspace-napcat-napcat-private-993484108--\napcat-private-993484108-wnel8vu-r1\session.v4.jsonl.zstd` 是 1588 个 zstd 帧首尾相接（不是单流），按 magic `28 b5 2f fd` 逐帧 `zstdDecompressSync` 再拼接才解得开。
+- 泄漏的那几轮（turn 163/164/165/167/169/170/171）里，`assistant/message` 的 `content` 中 reasoning 块长度都是 0 或单个空格 `" "`，**所有独白、`</apc">`、`｜｜DSML｜｜` 全都写在唯一的 text 块内部**。所以不是把 reasoning 通道混进了正文，而是模型自己把思考写进了正文。
+- 因此「bridge 侧只取 content」这条路无解——它本来就只取 text 块：`src/bridge.ts:1653-1662` 的 `messageText(message)` 只收 `item.type === 'text' && typeof item.text === 'string'` 再 `parts.join('')`。取值处没有错，只能在出口清。
+- 出口三处都过 `sanitizeReply`：`src/bridge.ts:1443`（模型答复）、`src/bridge.ts:1566`（桥主动发送）、`src/onebot.ts:109-111`（线边界 `sanitizeOutgoingMessage`），规则加在 `src/text.ts` 一处即可全覆盖。
+
+**改法**（`src/text.ts`，新增 4 个常量 + 2 个函数，`sanitizeReply` 与 `stripToolSyntax` 各接一次）：
+
+- 思考独白：`MONOLOGUE_LINE`（src/text.ts:207）识别「等等，我 / 我上一轮 / 这轮发 / 直接回。 / 直接输出文字即可 / 就回。」这类自我推演行首（允许空白、`>`、`#`、`*`、`-` 前缀）；`META_NARRATION_LINE`（src/text.ts:213）识别「用户说"……"…我回」式第三人称复述，**必须引号开头**才能命中，`用户说他在改配置，我回了个收到` 这种转述放行；`truncateMonologue`（src/text.ts:218-231）按行扫、跟踪 ``` 围栏，一旦命中就 `return lines.slice(0, index).join('\n')`——只截不 `return null`，截空后交给下游既有的静默判定。
+- 控制标记：`CONTROL_MARKER`（src/text.ts:352）覆盖 `DSML` / `antml:` / `im_start` / `im_end` / `invoke` / `parameter` / `function_calls`，半角竖线与全角竖线 `｜`（U+FF5C）都认；必须以尖括号或竖线起头，否则 `src/bridge/invoke.ts` 这种路径会被吃到行尾。`BROKEN_CLOSE_TAG`（src/text.ts:355）只认「标签名后紧跟引号/反斜杠残渣」的残缺闭合标签（如 `</apc">`），不吃正常行尾。`PROTOCOL_LINE`（src/text.ts:357）把只剩协议残段的整行直接丢。三者接进 `stripToolSyntax`（src/text.ts:360-380）的行内链与整行过滤，代码块与行内反引号内不参与。
+- 顺带修掉一个更老的误删：`HOST_NOTICE_BLOCK` 是 `/gi` 且不认反引号，正文里写 `` `<system_warning>` `` 时会把后面整段吃到结尾。新增 `outsideCode`（src/text.ts:318）把 ``` 围栏块与行内反引号切出去，只对普通段落跑 `HOST_NOTICE_BLOCK`（src/text.ts:327）。这条不在本次两条现象里，是用全量真实语料审计发现的既有缺陷，一并修了。
+
+**验证**：
+
+- `npm run typecheck` 通过；`npm run build` 通过；`npm test` → **129 tests, 129 pass, 0 fail**。
+- 逐条跑真实语料（`.tmp-xb26/exact.mjs`，跑构建产物 `lib/text.js`）：turn163 整段 → `？？`；`</apc">!!!` 三连感叹号块 → `!!!\n!!!\n!!!`；全角 DSML 三连 → 只剩正文；invoke 残段 → 只剩正文；`<|im_start|>` / `<|im_end|>` 夹在正文中 → 只剩正文。
+- 全量真实语料审计（`.tmp-xb26/audit.mjs`，176 条来自会话日志的 user/assistant 正文；判据是「输出是否为输入的前缀」即发生了截断）：截断 18 条 = `[[NAPCAT_SILENT]]`×5 → 空（既有规则）+ `User:` / `助手:` 伪角色行 9 条（既有规则，都是历史泄漏）+ 本次三处（turn163 80→2 字、turn170 2000→1615、turn171 105→41）。**修复前被误删的 3 条（我自己解释 `<system_warning>` 的正文）已恢复完整**。
+- 反例全部原样保留：反引号里的 `<system_warning>`、代码块里的 `<system_reminder>`、`等等，你说的是哪个文件？`、`用户说他在改配置，我回了个收到`、`直接回答我就行`、`我这边接着等结果`、`a < b 且 c > d`、句中引用的 `{"should_reply":false}`、`看 src/bridge/invoke.ts 那个文件`。
+
+**脏输入语料**：`test/leak-corpus.test.mjs` 从 DUMP 20 / KEEP 9 扩到 **DUMP 28 / KEEP 16**。本次加 8 条 DUMP（思考独白整段 / 只有说明句 / 第三人称复述、残闭合标签与行内残标签、DSML 收尾三连、invoke 残段、im_start 与 im_end），7 条 KEEP（反引号里与代码块里的宿主标签、独白特征的真问句 / 第三人称转述 / 直接回答、进度表句式、含 invoke 的路径）。
+
+**交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.26.tgz`（sha1 `819b0f94eb7b4e493ef4e2b036fd2f62efd91796`，133362 字节），已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（`npm install --legacy-peer-deps`），`diff -rq` 核对 `lib/`、`client/` 与仓库构建产物一致（无输出），安装后 `require('dsh-napcat/package.json').version` = `0.3.23-xb.26`，并用装好的 `lib/text.js` 直接跑 `sanitizeReply` 冒烟通过。commit `6322921`，已推 `origin/main`。
+
+**未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里复现这两类泄漏再验证修复**——真正效果要重载插件、等模型再出现同类幻觉才能确认。`MONOLOGUE_LINE` 是高置信特征黑名单，模型换种说法（比如「先确认一下」「其实这里」开头的自我推演）仍会漏；`outsideCode` 只认单反引号且不跨行（shortcut 已在代码注释标注）。
