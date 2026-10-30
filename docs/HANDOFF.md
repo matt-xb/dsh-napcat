@@ -274,3 +274,52 @@
 **交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.24.tgz`（shasum `799612f2fd16d5688a34cf12039ccf9fc93c0322`），已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（旧版备份在 `C:\Users\Administrator\.dsh\profiles\desktop\backup-dsh-napcat-xb.23-20261030115213`），`diff -r` 核对 tarball 的 `client/`、`lib/`、`package.json` 与安装目录一致。安装时因 profile 里既有的 `@wenbin_wb/dsh-bridge` peer 冲突（要 `@deepseek-ai/dsh-llm@>=0.1.0-rc.6` 解析到 0.1.0-rc.8，实际装 0.2.1-rc.5）必须加 `--legacy-peer-deps`；副作用是清掉插件嵌套 `node_modules` 里 111 个与宿主重复的包（`@deepseek-ai/*`、`@types/ws`、`typescript`），`ws`、`@xenova/transformers`、`onnxruntime-node`、`sharp` 均仍在且可解析。
 
 **未验证 / 需注意**：**没有重启 DSH，也没有在真实 GUI 里看过这页**——样式是按宿主 CSS 变量抄的，实际观感要刷新宿主客户端（前端改动重载插件或刷新页面即可，不需要重启宿主）后才能确认。
+
+## 出口收口：决策载荷 JSON 与脏输入语料（0.3.23-xb.25，2026-10-30）
+
+**现场**：群里先发「复读机没电了」，紧接着又发了一整块 ```json 围栏，内容是
+`{"language":"zh-CN","date":"2026-10-30","responses":[{"id":"m00358","should_reply":false,"reason":"用户重复发送同一句粗口…"}]}`。
+
+**那个 JSON 从哪来的（结论：模型自己编的，不是宿主也不是插件）**：
+
+- `src/` 下 grep `should_reply|shouldReply|responses|batch` 零命中 —— 插件里没有这个格式。
+- 宿主 `E:/deepseek 桌面版/resources/app.asar`（182 MB）grep `should_reply` **零命中** —— 不是宿主注入的提示词或批处理产物。
+- 决定性证据是会话日志原始事件（`assistant/message`，seq 982，turn 100 step 1）：那轮 `content` 只有 `[{type:'reasoning'},{type:'text',text:'\n\n\n\n```json\n{…should_reply…}\n```'}]`，`source.kind = "model"`。也就是说模型把「哪条要回」的内部判断臆造成一个 JSON，落在**唯一一个 text block**里，桥照单全收当正文发了；同一会话下一轮同样输入它回的是 `[[NAPCAT_SILENT]]`。JSON 里的 `m00358` 也是模型仿上下文里 ACP 消息 ref（`mNNNNN`）编的号。
+- 所以**没有「提示词源头」可改**。根因是出口只有针对具体字符串的黑名单，没有识别「结构化内部产物」这一类。
+
+**改法**（`src/text.ts`，新增 4 个私有函数 + 1 个常量，`sanitizeReply` 首行调用）：
+
+- `DECISION_KEYS`（src/text.ts:212）`should_reply/shouldReply/should_respond/shouldRespond/should_speak/reply_decision`；`isDecisionPayload`（src/text.ts:213-220）递归数组，对象带任一决策键即真，或 `responses`/`results` 是数组且每项都真。
+- `matchJsonEnd`（src/text.ts:222-240）从 `{`/`[` 找配对位置，认字符串内转义，不完整返回 -1。`isDecisionJson`（src/text.ts:242-250）parse 得出来且带决策字段才算；**解析失败一律当正文**。
+- `isBlockSolo`（src/text.ts:252-259）只有前后都是行边界才算「独占一块」——句子里引用 `{"should_reply":false}` 不动（用户可能就是在问这段）。
+- `stripDecisionPayload`（src/text.ts:263-283）：整条裸 JSON → `''`；代码围栏块（含 ```` ``` ```` 行）整块删；再扫裸 JSON 块。`sanitizeReply` 首行改为先过它（src/text.ts:286）。
+- 提示词侧加一句兜底（src/bridge.ts:44）：`没有回复价值可以只输出 [[NAPCAT_SILENT]]，不要用任何 JSON 或字段说明「哪条回、哪条不回」`。
+- shortcut 已标注（src/text.ts:262）：只删独占整块的 JSON，混在句子中间的靠提示词约束。
+
+**白名单方案：评估了，没做**。彻底白名单（只放行确定是自然语言的内容，其余全丢）在本插件不成立：出口同时承载用户要的代码块、表格、配置文件、日志片段（`napcat_send_message` 给别的聊天发长文、后台任务回传结果都走同一条 `sanitizeOutgoingMessage`），判据只能是「像不像自然语言」，而模型生成的正文和模型幻觉的内部产物在**语法上同构**——这轮泄漏物本身就是合法 JSON、没有可判别的语义标记。做白名单等于用更粗的启发式换更大的误伤面（用户要的代码被吞）。**改成按类型收口**：能确定归类的泄漏物（宿主头/群上下文头/宿主通知块/伪角色行/runtime context/包装标签/工具语法/本地媒体路径/决策载荷）在共享出口一处剥，剥完为空就不发；剩下的靠提示词约束，不赌全量白名单。
+
+**外发位置全清点**（本次逐处确认）：
+
+| 位置 | 触发条件 | 兜底 |
+| --- | --- | --- |
+| `src/onebot.ts:109-111` | 任意 `send_msg`/`send_group_msg`/`send_private_msg` | `sanitizeOutgoingMessage` —— **全插件唯一线边界，所有发送必经** |
+| `src/bridge.ts:1443` | 模型 `assistant/message` 正文 | `sanitizeReply`，null → `outputBlocked` 整轮不发 |
+| `src/bridge.ts:1566` | 桥主动发送（turn/end、主动发言、任务回执） | 再 `sanitizeReply`，null 时 strict 抛错 |
+| `src/bridge.ts:1600` | `conn.call('send_msg')` | 上游已 clean + onebot 线边界二次 |
+| `src/bridge.ts:784` | `trackTextSend` 记录已发文本 | `sanitizeReply`（只用于去重比对） |
+| `src/tools.ts:128` | `sendSegments`（发图/文件附文字） | `sanitizeOutgoingMessage` |
+| `src/tools.ts:146` | `napcat_send_message` | `sanitizeReply` + `splitText(1200)`，空则抛 |
+| `src/tools.ts:163` | 上者的 `conn.call('send_msg')` | 入参已 clean，线边界再兜一次 |
+| `src/tools.ts:245` | `napcat_api` 任意 `send_*` 动作 | `sanitizeOutgoingMessage` |
+| `src/tools.ts:421` / `:467` | 语音、唱歌 | 只发 `{type:'record'}`，无文本，不适用 |
+| `src/tasks.ts:159` | 后台任务结果回传 | `sanitizeReply` 后再交给桥 |
+
+以上 11 处没有一处裸奔：文本类全部收敛到 `sanitizeReply`/`sanitizeOutgoingMessage` 两个函数，最终再由 onebot 线边界兜一次。
+
+**脏输入语料**：新增 `test/leak-corpus.test.mjs`，表驱动三组 —— `DUMP` 18 条（本次决策载荷 6 条：围栏原样/裸 JSON/正文后跟 JSON/camelCase/数组/results；加 system_warning 成对与未闭合、system_reminder 夹杂、宿主头、群上下文头、User:、助手:、单行 assistant、runtime context 整块与正文后、包装标签、工具语法、本地图片语法、静默标记）、`KEEP` 9 条（代码块里的 JSON、对象字面量、句子中间引用 JSON、行内反引号、提到标签名/字段名/runtime 字样、多行正文、尖括号比较）、以及「剥空后必须抛空消息」。以后每次实测泄漏把原文加进 `DUMP` 即可。
+
+**验证**：`npm run typecheck` / `npm run build` 通过；`npm test` → **129 tests, 129 pass, 0 fail**（基线 126 + 新文件 3 条）。
+
+**交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.25.tgz`（sha1 `abbd65a0657b54d83ee0ff5a7c9eb2fa6522464f`，132015 字节），已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（旧版备份 `backup-dsh-napcat-xb.24-20261030123756`），`npm install --legacy-peer-deps` 安装，`diff -r` 核对 tarball 的 `lib/`、`client/`、`package.json` 与安装目录一致，安装后 `require('dsh-napcat/package.json').version` = `0.3.23-xb.25`，`lib/text.js`、`lib/bridge.js` 与仓库源码构建产物逐字节相同。
+
+**未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里复现这次泄漏再验证修复**——真实效果要重载插件后由模型再出现同类幻觉才能确认；`stripDecisionPayload` 对「决策 JSON 夹在句子中间」是已知漏网点（shortcut 已标注）。
