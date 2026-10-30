@@ -10,6 +10,7 @@ import { registerTools } from '../lib/tools.js'
 import { currentVoiceName, resetVoiceOverride, resolveVoiceRef, setVoiceOverride } from '../lib/ttsvoice.js'
 import { resetVoiceStore } from '../lib/voicestore.js'
 import { synthesizeToWav } from '../lib/tts.js'
+import { makeWav } from './wav-fixture.mjs'
 
 const PRESETS = { '原版': 'D:/ref/original_ref.wav', '银月': 'D:/ref/yinyue_ref_n24.wav' }
 const log = () => {}
@@ -42,10 +43,7 @@ test('音色解析：会话覆盖 > ttsVoices[ttsVoice] > ttsVoiceRef', async ()
   const wav = await synthesizeToWav('你好', config, log, {
     fetch: async url => {
       voice = new URL(String(url)).searchParams.get('voice') ?? ''
-      const buffer = Buffer.alloc(48)
-      buffer.write('RIFF', 0, 'latin1')
-      buffer.write('data', 36, 'latin1')
-      return { ok: true, status: 200, arrayBuffer: async () => buffer }
+      return { ok: true, status: 200, arrayBuffer: async () => makeWav() }
     },
   }, KEY)
   assert.equal(typeof wav, 'string')

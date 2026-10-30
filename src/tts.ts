@@ -17,6 +17,7 @@ import { ensureTempDir } from './media.js'
 import { withGpu } from './gpu.js'
 import type { LogLevel } from './onebot.js'
 import { resolveVoiceRef } from './ttsvoice.js'
+import { normalizeWav } from './wav.js'
 
 type Log = (level: LogLevel, message: string) => void
 
@@ -134,9 +135,10 @@ async function synthesizeAttempt(
     if (!response.ok) throw new Error('HTTP ' + response.status)
     const buffer = Buffer.from(await response.arrayBuffer())
     if (buffer.length < 44 || buffer.subarray(0, 4).toString('latin1') !== 'RIFF') throw new Error('返回的不是 wav（' + buffer.length + ' 字节）')
+    const normalized = normalizeWav(buffer)
     const dir = await ensureTempDir()
     const wav = join(dir, 'tts-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '.wav')
-    await writeFile(wav, buffer)
+    await writeFile(wav, normalized.buffer)
     log('debug', 'TTS 合成: ' + text.slice(0, 20) + ' → ' + wav)
     return { wav }
   } catch (error) {

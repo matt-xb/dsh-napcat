@@ -4,19 +4,11 @@ import assert from 'node:assert/strict'
 import { rm } from 'node:fs/promises'
 
 import { synthesizeAliyun } from '../lib/aliyun.js'
+import { makeWav } from './wav-fixture.mjs'
 
 const logs = []
 const log = (level, message) => logs.push({ level, message })
 
-function wavBuffer() {
-  const buffer = Buffer.alloc(48)
-  buffer.write('RIFF', 0, 'latin1')
-  buffer.writeUInt32LE(40, 4)
-  buffer.write('WAVEfmt ', 8, 'latin1')
-  buffer.write('data', 36, 'latin1')
-  buffer.writeUInt32LE(4, 40)
-  return buffer
-}
 
 const baseConfig = {
   aliyunApiKey: 'sk-test',
@@ -33,7 +25,7 @@ function fakeFetch(seen) {
   return async (url, init) => {
     if (seen.request === undefined) seen.request = { url: String(url), body: JSON.parse(init.body) }
     if (String(url).startsWith('https://oss.example.com/')) {
-      return { ok: true, status: 200, arrayBuffer: async () => wavBuffer() }
+      return { ok: true, status: 200, arrayBuffer: async () => makeWav() }
     }
     return {
       ok: true,

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { ensureTtsServer, resetTtsAutoStart, synthesizeToWav } from '../lib/tts.js'
+import { makeWav } from './wav-fixture.mjs'
 
 const config = {
   ttsEnabled: true,
@@ -21,19 +22,9 @@ const log = (_level, message) => logs.push(message)
 const noSleep = async () => {}
 const logFile = join(tmpdir(), 'dsh-napcat-test', 'tts_server.out')
 
-/** 一段最小的合法 wav（44 字节头 + 4 字节数据）。 */
-function wavBuffer() {
-  const buffer = Buffer.alloc(48)
-  buffer.write('RIFF', 0, 'latin1')
-  buffer.writeUInt32LE(40, 4)
-  buffer.write('WAVEfmt ', 8, 'latin1')
-  buffer.write('data', 36, 'latin1')
-  buffer.writeUInt32LE(4, 40)
-  return buffer
-}
 
 const refused = () => Object.assign(new Error('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9880'), { code: 'ECONNREFUSED' }) })
-const ok = body => ({ ok: true, status: 200, json: async () => body, arrayBuffer: async () => wavBuffer() })
+const ok = body => ({ ok: true, status: 200, json: async () => body, arrayBuffer: async () => makeWav() })
 
 test('first fetch refused → auto start → retry succeeds once service is loaded', async () => {
   resetTtsAutoStart()

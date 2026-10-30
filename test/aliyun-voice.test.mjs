@@ -6,19 +6,11 @@ import { readFile, rm } from 'node:fs/promises'
 import { synthesizeAliyun, transcribeAliyun } from '../lib/aliyun.js'
 import { synthesizeToWav } from '../lib/tts.js'
 import { transcribeRecord } from '../lib/voice.js'
+import { makeWav } from './wav-fixture.mjs'
 
 const logs = []
 const log = (level, message) => logs.push({ level, message })
 
-function wavBuffer() {
-  const buffer = Buffer.alloc(48)
-  buffer.write('RIFF', 0, 'latin1')
-  buffer.writeUInt32LE(40, 4)
-  buffer.write('WAVEfmt ', 8, 'latin1')
-  buffer.write('data', 36, 'latin1')
-  buffer.writeUInt32LE(4, 40)
-  return buffer
-}
 
 const baseConfig = {
   aliyunApiKey: 'sk-test',
@@ -45,7 +37,7 @@ test('transcribeAliyun 用 OpenAI 兼容端点并取 choices[0].message.content'
     status: 200,
     text: async () => JSON.stringify({ choices: [{ message: { content: ' 你好  呀 ' } }] }),
   }))
-  const text = await transcribeAliyun(wavBuffer(), baseConfig, log, { fetch })
+  const text = await transcribeAliyun(makeWav(), baseConfig, log, { fetch })
   assert.equal(text, '你好 呀')
   assert.equal(calls.length, 1)
   assert.match(calls[0].url, /\/compatible-mode\/v1\/chat\/completions$/)
@@ -61,7 +53,7 @@ test('transcribeAliyun 用 OpenAI 兼容端点并取 choices[0].message.content'
 test('transcribeAliyun 没配 key 直接抛错，不发请求', async () => {
   let called = 0
   const fetch = async () => { called += 1; return { ok: true, status: 200, text: async () => '{}' } }
-  await assert.rejects(() => transcribeAliyun(wavBuffer(), { ...baseConfig, aliyunApiKey: '' }, log, { fetch }), /aliyunApiKey/)
+  await assert.rejects(() => transcribeAliyun(makeWav(), { ...baseConfig, aliyunApiKey: '' }, log, { fetch }), /aliyunApiKey/)
   assert.equal(called, 0)
 })
 
@@ -71,14 +63,14 @@ test('transcribeAliyun 返回错误码时抛错并带上 code/message', async ()
     status: 401,
     text: async () => JSON.stringify({ code: 'InvalidApiKey', message: 'Invalid API-key provided.' }),
   })
-  await assert.rejects(() => transcribeAliyun(wavBuffer(), baseConfig, log, { fetch }), /HTTP 401：InvalidApiKey/)
+  await assert.rejects(() => transcribeAliyun(makeWav(), baseConfig, log, { fetch }), /HTTP 401：InvalidApiKey/)
 })
 
 test('synthesizeAliyun 先取 audio.url 再下载，落成 wav 文件', async () => {
   logs.length = 0
   const { calls, fetch } = recordCalls(async url => {
     if (url.startsWith('https://oss.example.com/')) {
-      return { ok: true, status: 200, arrayBuffer: async () => wavBuffer() }
+      return { ok: true, status: 200, arrayBuffer: async () => makeWav() }
     }
     return {
       ok: true,
@@ -122,7 +114,7 @@ test('voiceTtsProvider=aliyun 时 synthesizeToWav 走云端，不碰本机 TTS �
   const fetch = async (url) => {
     urls.push(String(url))
     if (String(url).startsWith('https://oss.example.com/')) {
-      return { ok: true, status: 200, arrayBuffer: async () => wavBuffer() }
+      return { ok: true, status: 200, arrayBuffer: async () => makeWav() }
     }
     return {
       ok: true,
@@ -148,7 +140,7 @@ test('voiceAsrProvider=aliyun 时 transcribeRecord 走云端，不起 whisper �
     urls.push(String(url))
     return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: '云端识别结果' } }] }) }
   }
-  const conn = { call: async (action) => ({ base64: 'data:audio/wav;base64,' + wavBuffer().toString('base64'), action }) }
+  const conn = { call: async (action) => ({ base64: 'data:audio/wav;base64,' + makeWav().toString('base64'), action }) }
   const config = {
     ...baseConfig,
     voiceAsrProvider: 'aliyun',
