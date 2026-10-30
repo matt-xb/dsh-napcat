@@ -38,6 +38,16 @@ const DUMP = [
   ['工具语法', '好啊\n</｜｜DSML｜｜ parameter>\n> nope', '好啊'],
   ['本地图片语法', '![](D:\\NapCat\\stickers\\bqb-shock-01.jpg)', ''],
   ['静默标记', '[[NAPCAT_SILENT]]', ''],
+  // 2026-10-30 12:30 实测：思考独白写进了正文 text 块（不是 reasoning 通道）。
+  ['思考独白·整段', '？？\n\n<br>\n\n用户说"比如 ？？"，我回"？？"作为演示。\n\n直接回。\n\n？？\n\n等等，我上一轮已经发过"……"，这轮发"？？"正好演示。就回。\n\n？？\n\n直接输出文字即可。？？\n', '？？'],
+  ['思考独白·只有说明句', '好\n直接输出文字即可。', '好'],
+  ['思考独白·第三人称复述', '嗯\n用户说"在吗"，我回"在"作为演示', '嗯'],
+  ['残闭合标签', '</apc">!!!\n\n!!!\n\n\n!!!', '!!!\n!!!\n!!!'],
+  ['残闭合标签·行内', '改完了</apc">', '改完了'],
+  // 控制标记：全角竖线的 DSML 与 <|im_start|> 一族。
+  ['控制标记·DSML 收尾三连', '嘿嘿\n\n</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>', '嘿嘿'],
+  ['控制标记·invoke 残段', '任务派出去了\n<｜｜DSML｜｜ invoke name="napcat_task_status">\n｜｜/｜｜DSML｜｜ invoke>', '任务派出去了'],
+  ['控制标记·im_start 与 im_end', '好\n<|im_start|>你\n<|im_end|>', '好\n你'],
 ]
 
 const KEEP = [
@@ -51,6 +61,15 @@ const KEEP = [
   ['提到 runtime 字样', 'Time sampled while preparing turn 78, step 1: 这句是报错原文吗'],
   ['普通多行正文', '第一行\n第二行'],
   ['尖括号比较', 'a < b 且 c > d'],
+  // 反引号/代码块里在讲这个标签，不能当注入块删。
+  ['反引号里的 system_warning', '又是同一类毛病：`<system_warning>` 这种内部标签被当成正文发出去了'],
+  ['代码块里的 system_reminder', '看这段：\n```html\n<system_reminder>x</system_reminder>\n```'],
+  // 独白特征词出现在真正的问句/转述里要放行。
+  ['独白特征·真问句', '等等，你说的是哪个文件？'],
+  ['独白特征·第三人称转述', '用户说他在改配置，我回了个收到'],
+  ['独白特征·直接回答', '直接回答我就行'],
+  ['进度表句式', '我这边接着等结果'],
+  ['含 invoke 的路径', '看 src/bridge/invoke.ts 那个文件'],
 ]
 
 test('脏输入语料：实测泄漏物一律不外发', () => {

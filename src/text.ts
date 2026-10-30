@@ -199,6 +199,36 @@ function stripRuntimeContext(text: string): string {
 /** 行首伪角色标记：模型复述会话内部记录时会写 `User: …` / `助手: …`，或单起一行的 `assistant`。 */
 const DIALOG_LINE = /^[ \t]*(?:(?:User|Human|Assistant|助手)[ \t]*[:：]|(?:User|Human|Assistant|助手)[ \t]*$)/im
 
+/**
+ * 自我推演独白：模型把「心里过的那几步」写进正文的 text 块（不是 reasoning 通道），
+ * 实测有 `等等，我上一轮已经发过"……"`、整行 `直接回。`、`直接输出文字即可。？？`。
+ * 只认行首的高置信特征——`等等，你说的是哪个文件？` 这种真问句要放行。
+ */
+const MONOLOGUE_LINE = /^[ \t>#*\-]*(?:等等[，,][ \t]*我|我上一轮|这轮发|直接回(?:[。.！!]|$)|直接输出文字即可|就回[。.]?$)/
+/**
+ * 第三人称复述自己的动作：`用户说"比如 ？？"，我回"？？"作为演示。`
+ * 对用户说话时用「你」；出现「用户说『引号原文』…我回」就是在心里推演。
+ * 只看引号形态——`用户说他在改配置，我回了个收到` 这种转述留着。
+ */
+const META_NARRATION_LINE = /^[ \t>#*\-]*用户说[ \t]*["“「][^\n]*我回/
+/**
+ * 从第一句独白起整段截掉：后面已经不是给用户的话了。
+ * shortcut: 只认行首特征，独白夹在句子中间时截不到，真遇到再补锚点。
+ */
+function truncateMonologue(text: string): string {
+  const lines = text.split('\n')
+  let fenced = false
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    if (/^\s*```/.test(line)) {
+      fenced = !fenced
+      continue
+    }
+    if (!fenced && (MONOLOGUE_LINE.test(line) || META_NARRATION_LINE.test(line))) return lines.slice(0, index).join('\n')
+  }
+  return text
+}
+
 /** 宿主注入的内部通知块（`<system_warning>` / `<system_reminder>`）：模型会整段当正文复述出去。 */
 // shortcut: 代码块里写同样的标签也会被砍，真要在群里贴这种样例时再按行放行。
 const HOST_NOTICE_BLOCK = /<system_(?:warning|reminder)>[\s\S]*?(?:<\/system_(?:warning|reminder)>|$)/gi
@@ -281,12 +311,20 @@ function stripDecisionPayload(text: string): string {
   return result
 }
 
+/**
+ * 只在正文段落上跑规则：围栏块和行内反引号里是「有人在讲这个标签」，不能当成真的注入块删掉。
+ * shortcut: 只认单反引号不跨行；反引号里套反引号（``…``）的样例仍会被当成正文处理。
+ */
+function outsideCode(text: string, apply: (part: string) => string): string {
+  return text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part, index) => index % 2 === 1 ? part : apply(part)).join('')
+}
+
 /** Internal context must never be forwarded to QQ. */
 export function sanitizeReply(text: string): string | null {
   const raw = stripDecisionPayload(text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, ''))
   if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(raw.replace(/\s+/g, ''))) return null
   // 未闭合的也从开始标签砍到结尾，宁可少发也不外泄。
-  const clean = raw.replace(HOST_NOTICE_BLOCK, '')
+  const clean = truncateMonologue(outsideCode(raw, part => part.replace(HOST_NOTICE_BLOCK, '')))
   // 复述聊天记录不是回复：`User: …` 之后的内容整段砍掉，否则等于把历史又播一遍
   const replayed = clean.search(DIALOG_LINE)
   // shortcut: 代码块里写 `User: ` 也会被砍，真出现再说
@@ -306,6 +344,17 @@ const TAG_ONLY_LINE = /^(?:\s*(?:<!--[\s\S]*?-->|<[^>]+>)\s*)+$/
 const LOCAL_IMAGE_MARKDOWN = /!\[[^\]]*\]\(\s*<?(?:[A-Za-z]:[\\/]|file:\/\/\/?)[^)\s>]*>?\s*\)/gi
 /** 独占一行的本地媒体绝对路径。 */
 const LOCAL_MEDIA_LINE = /^[A-Za-z]:[\\/].*\.(?:png|jpe?g|gif|webp|bmp|mp4|wav|mp3|amr|silk)$/i
+/**
+ * 模型控制标记残片：`<|im_start|>`、`<｜｜DSML｜｜ invoke …>`、`||DSML||>`、`<||DSML||`（实测多为全角竖线 ｜）。
+ * 它们不是任何合法标签，也没有人会当正文读，出现即丢；一直吃到行尾，兼顾残缺和跨行断在半截的情况。
+ */
+// shortcut: 行首必须有一个尖括号或竖线，免得把 `path/invoke` 这种正常文本吃到行尾。
+const CONTROL_MARKER = /[<|｜][<|｜/]{0,5}\s*(?:DSML|antml:|im_start|im_end|invoke|parameter|function_calls)[^\n]*?(?:>|$)/gi
+/** 残缺闭合标签：`</apc">` 这种 `</` 起头、名字后面还挂着引号杂字的段落（完整标签走 WRAPPER_TAGS）。 */
+// shortcut: 只认名字后紧跟的引号/反斜杠残渣，别的一律当正文；真出现别的残缺形态再补。
+const BROKEN_CLOSE_TAG = /<\/[A-Za-z][A-Za-z0-9_.:-]{0,32}["'\\]{1,3}>?/g
+/** 只剩协议残段的整行（跨行断开的 ` invoke name="x">`）；带汉字的正常句子不动。 */
+const PROTOCOL_LINE = /^[\s<>|｜/]*(?:invoke|parameter|function_calls|calls)\b[^\p{Script=Han}]*$/iu
 
 /** Leaked tool-call syntax (full-width pipe variants included) must not reach the chat. */
 function stripToolSyntax(text: string): string {
@@ -323,10 +372,11 @@ function stripToolSyntax(text: string): string {
       continue
     }
     const trimmed = line.trim()
-    if (LOCAL_MEDIA_LINE.test(trimmed) || TAG_ONLY_LINE.test(trimmed)) continue
+    if (LOCAL_MEDIA_LINE.test(trimmed) || TAG_ONLY_LINE.test(trimmed) || PROTOCOL_LINE.test(trimmed)) continue
     // 行内反引号里的内容也不动。
     lines.push(line.split(/(`[^`]*`)/).map((part, index) => index % 2 === 1 ? part
-      : part.replace(LOCAL_IMAGE_MARKDOWN, '').replace(ANY_TAG, (whole, tag: string) => WRAPPER_TAGS.has(String(tag).toLowerCase()) ? '' : whole)).join(''))
+      : part.replace(LOCAL_IMAGE_MARKDOWN, '').replace(CONTROL_MARKER, '').replace(BROKEN_CLOSE_TAG, '')
+        .replace(ANY_TAG, (whole, tag: string) => WRAPPER_TAGS.has(String(tag).toLowerCase()) ? '' : whole)).join(''))
   }
   return lines
     .filter(line => !/DSML|antml:|<\/?function_calls>|<\/?invoke\b|^[\s>|-]*(?:parameter|nope)\b.*$/i.test(line))
