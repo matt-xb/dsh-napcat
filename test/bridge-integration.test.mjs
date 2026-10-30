@@ -480,6 +480,27 @@ test('wildcard persona covers new chats; precise persona replaces it; style is s
   assert.equal(f.b.personaForChat('private:200'), 'private-style')
   const rules = f.b.personaText({ agent: f.agent }); assert.match(rules, /表情包/); assert.match(rules, /napcat_task_start/)
 })
+test('group turns get a hard voice rule that outranks the short-text default', () => {
+  const f = fixture('group')
+  const rules = f.b.personaText({ agent: f.agent })
+  assert.match(rules, /napcat_send_voice/, '群聊规则段要硬性点名语音工具')
+  assert.match(rules, /发语音优先于/, '语音和「一句短话」的优先级必须写明')
+  assert.ok(rules.indexOf('【群聊边界】') < rules.indexOf('群里有语音就说'), '语音条款要落在【群聊边界】段内，不是游离在别处')
+})
+test('private turns keep no group voice rule', () => {
+  const f = fixture('private')
+  const rules = f.b.personaText({ agent: f.agent })
+  assert.ok(!/【群聊边界】/.test(rules), '私聊不该拿群聊规则段')
+  assert.ok(!/群里有语音就说/.test(rules), '私聊不该被群聊语音条款覆盖')
+})
+test('task rules require sizing parallel subagents by complexity', () => {
+  const f = fixture()
+  const rules = f.b.personaText({ agent: f.agent })
+  assert.match(rules, /派任务前先估复杂度/, '要写明先估复杂度再定数量')
+  assert.match(rules, /拆成两三个并行子任务/, '难任务要拆成两三个并行')
+  assert.match(rules, /派一个就够/, '小任务只派一个')
+  assert.match(rules, /避免互相覆盖同一批文件/, '拆的时候要讲清文件边界')
+})
 test('wire rejects internal context before transmission and accepts a valid success acknowledgement', async () => {
   const conn = new OneBotConnection({ log() {} }), sent = []
   conn.socket = { readyState: 1, send(raw, callback) {

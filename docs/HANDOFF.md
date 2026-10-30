@@ -481,3 +481,44 @@
 **交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.31.tgz`（sha1 `f13e0e95df565dd52254d006544d125c83330706`，sha256 `269697f7b1d8733a3a3f6c28b60606e45b524acf4960a2d91b4b28c3d767fa01`，140804 字节，52 个文件）。解包后 `diff -r lib <tgz>/package/lib` 无差异（LIB_MATCH）。
 
 **未做 / 需注意**：没有 `npm publish`，没有安装到 profile（`C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat` 里仍是 xb.30），没有动 `cordis.patch.yml`。所以**重启 DSH 前这层修复不生效**。`replaysInjected` 的阈值是保守取值：漏掉不足 60 字的短残句交给关键词层，宁可少拦也不误杀正常聊天；如果之后还漏，优先把漏掉的原文形态加进 `INTERNAL_CONTEXT_MARKERS` 而不是调低阈值。
+
+## 群聊语音率提升 + 按复杂度派并行子任务（0.3.23-xb.32，2026-10-30）
+
+**用户反馈**：「群里面现在还不喜欢发语音」（第三轮，前两轮分别是「群里那个怎么不喜欢发语音」「活人感有点了，但是为什么不发语音？」）；以及「自己要根据任务的复杂程度去排去安排解决这个任务的多少子智能体数量……难的任务可以两三个同时干」。
+
+### 任务一诊断：不是调用失败，是模型根本不调
+
+取证方式：解压 `~/.dsh/sessions/<cwd转义>--/<sessionId>/session.v4.jsonl.zstd`，按 `tool/call` / `tool/result` 事件统计（**注意这些文件是多帧 zstd 拼接，必须按 magic `28 b5 2f fd` 切帧逐帧解，否则只解出开头 224 字节**）。
+
+1. **工具和 TTS 都是好的**。群 `napcat-group-1078746470-w1v2ut5m-r1` 有 26 次 `tool/call napcat_send_voice`，26 次全成功、0 失败；私聊 `napcat-private-993484108-wnel8vu-r1` 20 次里 19 成功、1 次 TTS 超时（`http://127.0.0.1:9880` 不可用）。→ 不是"调了但失败"，是"多数轮次压根没调"。
+2. **耗时不是阻碍**。26 次语音 `tool/call → tool/result` 耗时 min 1315ms / p50 1718ms / p90 2119ms / max 2457ms。排除「合成太慢，模型躲着走」。
+3. **真实比例**。该群 303 个 turn：语音轮 23（7.6%）、发图轮 19（6.3%）、纯文字轮 261（86%）。同群更早的会话（`…w1v2ut5m`，268 turn）只有 1 次语音、23 次发图。其他群（231331443 / 1029493906 / 1094121019 / 963188275 / 974998212）语音调用**全部为 0**，发图 5~24 次。→ 文字是压倒性默认路径。
+4. **人设里的软示例确实有效，但不够**。按「该 turn 之前最后一次注入的群人设里有没有语音句」分桶：无语音句 281 turn / 语音 20 / 7.1%；有语音句 22 turn / 语音 3 / 13.6%。翻了一倍，绝对值仍低，且样本只有 22 轮。
+5. **机制上的冲突（代码证实）**。群聊轮同时拿到：profile 人设（「有人跟你唠、带情绪、或者连聊三四条→不说字，直接发条语音」）+ `TEXT_REPLY_RULES` 首句「闲聊默认一句短话、单行，通常5到25字」+ `GROUP_REPLY_RULES`（原两行里**一条语音相关的都没有**）。文字的指令更强、更靠前、零成本；语音只有人设里一句示例，既不是硬要求也没写和「一句短话」谁优先。旧版人设里还有「表情包是首要表达手段…不图省事只写字」和「发出图这一轮立刻结束，禁止输出任何文字」，进一步把注意力从语音推走。
+6. **排除「某些轮次工具被禁」**。主动发言分支（`src/bridge.ts:342-449`）没有工具白名单或禁用逻辑，只是文本提示。`napcat_send_voice` 的 `isConcurrencySafe: () => true`（`src/tools.ts:399`）。
+
+### 改动
+
+1. **`src/bridge.ts:52`（`GROUP_REPLY_RULES` 追加一行）— 群聊语音硬要求**：触发条件（有人跟你唠 / 带情绪 / 被怼 / 连聊三四条 / 想吐槽）明确点名调 `napcat_send_voice`，并写死优先级「发语音优先于【QQ回复】里"默认一句短话"那条——两者冲突时按发语音处理，这一轮发完语音就不再补文字、不再补图」，另加「连着几轮全在打字从没发过语音，就换一条语音」的纠偏，以及唯一例外（纯告知、要贴代码/步骤、对方需要看字）。放在 `GROUP_REPLY_RULES` 而不是 `TEXT_REPLY_RULES`，私聊行为不变。
+2. **`src/bridge.ts:58`（`TASK_REPLY_RULES` 追加一段）— 按复杂度决定并行子任务数量**：派任务前先估复杂度；单一明确的小改动（改一行、查一条、出一张图）派一个；难任务（查机制+改代码+补测试+打包，或跨多模块、多证据线）拆两三个并行、各管一块；拆的时候在每个任务描述里写清边界和文件范围，避免互相覆盖同一批文件。
+
+### 测试
+
+`test/bridge-integration.test.mjs` 新增 3 个用例：
+- `group turns get a hard voice rule that outranks the short-text default` —— 断言群聊 system prompt 里出现 `napcat_send_voice`、`发语音优先于`，且语音条款位置在 `【群聊边界】` 之后（确实落在群聊段内）。
+- `private turns keep no group voice rule` —— 私聊 prompt 不含 `【群聊边界】` 也不含群聊语音条款。
+- `task rules require sizing parallel subagents by complexity` —— 断言 `派任务前先估复杂度` / `拆成两三个并行子任务` / `派一个就够` / `避免互相覆盖同一批文件` 四句都在。
+
+`npm run typecheck` 通过，`npm run build` 通过，`npm test` → **150 tests, 150 pass, 0 fail, 0 skipped**（基线 147）。
+
+### 交付
+
+`E:/NapCat/releases/dsh-napcat-0.3.23-xb.32.tgz`（sha1 `719ed094334d7f663516849ee736cbd21edd1dea`，sha256 `afa6b7166e4ba8d5bbaa4be30d12b81bc471cbe65e5de563fbba53d7b6ba0113`，141286 字节，52 个文件）。解包后 `diff -r lib <tgz>/package/lib` 无差异（LIB_MATCH），`package/lib/bridge.js` 里两处新规则各命中 1 次，`package/package.json` 版本为 `0.3.23-xb.32`。
+
+### 未做 / 需注意
+
+没有 `npm publish`，没有安装到 profile（`C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat` 里仍是 xb.30），没有动 `cordis.patch.yml`。**重启 DSH 并装上新包之前这次改动不生效。**
+
+这次只动了插件侧的规则段。profile 人设（`cordis.patch.yml:916` 的 `group:*=`）里那句软示例仍然存在且和新的硬要求方向一致，两者不冲突；下次若还要加强，优先改 `GROUP_REPLY_RULES` 而不是人设——规则段是代码里的、可测试、不依赖现网配置文件。
+
+语音率的真实效果需要在装包重启后重新跑同样的统计脚本验证：`tool/call` 里 `napcat_send_voice` 的占比从 7.6% 往上走才算成功；如果没动，说明模型连硬要求也不吃，下一步该考虑的不是措辞而是机制（例如群聊里按轮次概率性地把文字路径关掉）。
