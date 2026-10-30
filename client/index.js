@@ -60,7 +60,10 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         ['Rocky', '粤语-阿强 · 男 · 粤语'], ['Kiki', '粤语-阿清 · 女 · 粤语'],
       ]
 
-      /** 设置页字段（与 src/config.ts 的 Config 一一对应）。 */
+      /**
+       * 设置页字段（与 src/config.ts 的 Config 一一对应）。
+       * group 只决定“画在哪个卡片里”，数组顺序就是卡片里的顺序；常用项排在最前。
+       */
       const FIELDS = [
         { key: 'mode', label: '连接方式', kind: 'select', options: [['forward', 'forward：插件连 NapCat'], ['reverse', 'reverse：NapCat 拨入']] },
         { key: 'url', label: 'NapCat WebSocket 地址', kind: 'text', placeholder: 'ws://<napcat-host>:3001' },
@@ -132,34 +135,101 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
       ]
 
       const NS = 'dsh-napcat'
-      const style = {
-        wrap: { display: 'flex', flexDirection: 'column', gap: '14px', maxWidth: '620px' },
-        hint: { color: 'var(--dsw-alias-label-tertiary, #888)', fontSize: '12px', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' },
-        row: { display: 'flex', flexDirection: 'column', gap: '4px' },
-        label: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #555)' },
-        input: {
-          font: 'inherit', fontSize: '13px', padding: '7px 9px', borderRadius: '6px',
-          border: '1px solid var(--dsw-alias-border-l2, #d0d0d0)',
-          // 宿主主题变量表里没有 --dsw-alias-bg-l1（写错会退到 #fff，暗色主题下白底白字看不见），
-          // 用宿主输入框同一套 token：bg-layer-1 + label-primary。
-          background: 'var(--dsw-alias-bg-layer-1, #fff)', color: 'var(--dsw-alias-label-primary, inherit)',
-          width: '100%', boxSizing: 'border-box',
-        },
-        checkRow: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' },
-        bar: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
-        btn: {
-          font: 'inherit', fontSize: '13px', padding: '7px 14px', borderRadius: '6px', cursor: 'pointer',
-          border: '1px solid var(--dsw-alias-border-l2, #d0d0d0)', background: 'transparent', color: 'var(--dsw-alias-label-primary, inherit)',
-        },
-        primary: {
-          font: 'inherit', fontSize: '13px', padding: '7px 14px', borderRadius: '6px', cursor: 'pointer',
-          border: '1px solid transparent',
-          // 主按钮跟宿主同一对 token：暗色主题下 business-primary 是浅蓝，配写死的 #fff 几乎看不清。
-          background: 'var(--dsw-alias-button-primary-fill, #1677ff)', color: 'var(--dsw-alias-label-primary-foreground, #fff)',
-        },
-        error: { color: 'var(--dsw-alias-state-error-primary, #d4380d)', fontSize: '12px', margin: 0, whiteSpace: 'pre-wrap' },
-        ok: { color: 'var(--dsw-alias-state-success-primary, #389e0d)', fontSize: '12px', margin: 0 },
+
+      /**
+       * 卡片分组。keys 的顺序就是卡片里的顺序；primary 常驻在页首，
+       * 带 collapsed 的组收进原生 <details>。字段的 key/label/kind 一律回 FIELDS 取，这里只排位置。
+       */
+      const GROUPS = [
+        { id: 'primary', title: '常用',
+          hint: '先把这几项填上就能连上 QQ；其余的按需往下翻。',
+          keys: ['mode', 'url', 'accessToken', 'botQQ', 'adminUsers', 'dmPolicy', 'groupPolicy', 'requireMention', 'voiceAsrProvider', 'voiceTtsProvider'] },
+        { id: 'connection', title: '连接与门控', keys: ['host', 'port', 'allowFrom', 'groupAllowFrom', 'triggerKeywords', 'ignoreSelf', 'replyAsQuote', 'splitMaxChars', 'sendIntervalMs'] },
+        { id: 'session', title: '会话与人格', keys: ['workspacePath', 'perChatWorkspace', 'personaOverrides'] },
+        { id: 'memory', title: '群记忆', hint: '最近对话缓冲 + 长期记忆，按群隔离。', keys: ['memoryEnabled', 'memoryBackend', 'memorySpacePrefix', 'recentLimit', 'injectRecent', 'injectMaxChars'] },
+        { id: 'voice', title: '语音识别', hint: '收到语音转文字。本机 whisper.cpp 或阿里云云端二选一。', keys: ['voiceToText', 'voiceWhisperBin', 'voiceWhisperModel', 'voiceLanguage', 'voiceTimeoutMs'] },
+        { id: 'tts', title: '语音合成', keys: ['ttsEnabled', 'ttsServerUrl', 'ttsVoiceRef', 'ttsSpeed', 'ttsEmotion', 'ttsTimeoutMs', 'ttsAutoStart', 'singEnabled', 'singTimeoutMs'] },
+        { id: 'aliyun', title: '阿里云云端语音', hint: '识别/合成后端选 aliyun 时才需要填。', keys: ['aliyunApiKey', 'aliyunTtsVoice'] },
+        { id: 'advanced', title: '高级设置', collapsed: true,
+          keys: ['reconnectMaxAttempts', 'agentPreset', 'provider', 'model', 'logLevel',
+            'warmupHistory', 'warmupStaleMinutes', 'warmupImages', 'warmupImageLimit',
+            'aliyunAsrModel', 'aliyunTtsModel',
+            'proactiveEnabled', 'proactiveRatePerHour', 'proactiveChance', 'proactiveCooldownMinutes', 'proactiveMaxPerHour', 'proactiveQuietHours', 'proactiveMinMessages', 'proactiveWindowMinutes',
+            'imageCache', 'imageCacheMaxBytes', 'imageCacheDailyCap', 'imageCacheRetentionDays'] },
+      ]
+
+      const FIELD_BY_KEY = {}
+      for (const field of FIELDS) FIELD_BY_KEY[field.key] = field
+
+      // 分组表漏项的兜底：漏掉的字段绝不能从页面上静默消失，塞进高级设置并告警。
+      {
+        const placed = new Set()
+        for (const group of GROUPS) {
+          group.keys = group.keys.filter((key) => {
+            if (FIELD_BY_KEY[key] === undefined || placed.has(key)) return false
+            placed.add(key)
+            return true
+          })
+        }
+        const missing = FIELDS.filter((field) => !placed.has(field.key))
+        if (missing.length > 0) {
+          const advanced = GROUPS[GROUPS.length - 1]
+          advanced.keys = advanced.keys.concat(missing.map((field) => field.key))
+          console.warn('[dsh-napcat] 设置页分组表漏了字段，已放进高级设置：' + missing.map((field) => field.key).join(', '))
+        }
       }
+
+      /**
+       * 视觉全部抄宿主设置页（`.wCInkW_*` / `._3nPmjq_*`）的 token：卡片、32px 输入框、
+       * 36px 按钮、details 折叠箭头。宿主面板内容列约 564px 宽，所以布局一律走流式/网格。
+       */
+      const CSS_TEXT = `
+.npc-page{max-width:760px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}
+.npc-title{margin:0 0 4px;font-size:16px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary)}
+.npc-intro{margin:0 0 10px;font-size:14px;line-height:22px;color:var(--dsw-alias-label-tertiary)}
+.npc-badges{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 12px}
+.npc-badge{display:inline-flex;align-items:center;gap:5px;padding:1px 6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs)}
+.npc-dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.npc-dot--on{background:var(--dsw-alias-state-success-primary)}
+.npc-dot--off{background:var(--dsw-alias-state-error-primary)}
+.npc-card{display:flex;flex-direction:column;gap:12px;margin:0 0 12px;padding:14px 16px;border:.5px solid var(--dsw-alias-settings-card-stroke);background:var(--dsw-alias-settings-card-fill);border-radius:var(--dsw-radius-xl)}
+.npc-card-title{margin:0;font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}
+.npc-card-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.npc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.npc-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.npc-field--wide{grid-column:1/-1}
+.npc-label{font-size:12px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.npc-input{box-sizing:border-box;width:100%;height:32px;padding:0 10px;font:inherit;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md)}
+.npc-input:focus{border-color:var(--dsw-alias-state-business-primary);outline:none}
+.npc-input::placeholder{color:var(--dsw-alias-label-dimmed)}
+textarea.npc-input{height:auto;min-height:88px;padding:8px 10px;resize:vertical;font-family:inherit}
+select.npc-input{cursor:pointer;max-width:100%}
+.npc-check{display:flex;align-items:flex-start;gap:8px;padding:2px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}
+.npc-check input{flex:none;width:16px;height:16px;margin:2px 0 0;accent-color:var(--dsw-alias-state-business-primary)}
+.npc-adv{margin:0 0 12px;padding-top:10px;border-top:.5px solid var(--dsw-alias-border-l2)}
+.npc-summary{display:flex;align-items:center;gap:6px;width:fit-content;margin-left:-4px;padding:2px 4px;font-size:12px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary);border-radius:var(--dsw-radius-sm);cursor:pointer;list-style:none}
+.npc-summary::-webkit-details-marker{display:none}
+.npc-summary:before{content:"";width:5px;height:5px;border-bottom:1.5px solid;border-right:1.5px solid;transform:rotate(-45deg) translate(-1px,-1px);transition:transform .12s}
+.npc-adv[open]>.npc-summary:before{transform:rotate(45deg) translate(-1px,-1px)}
+.npc-summary:hover{color:var(--dsw-alias-label-primary)}
+.npc-adv[open]>.npc-grid{margin-top:12px}
+.npc-savebar{position:sticky;bottom:0;z-index:2;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;padding:12px 0;background:var(--dsw-alias-bg-layer-2);border-top:1px solid var(--dsw-alias-border-l2)}
+.npc-savebar-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.npc-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:36px;padding:0 14px;font:inherit;font-size:14px;line-height:22px;border:none;border-radius:var(--dsw-radius-md);cursor:pointer}
+.npc-btn--primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}
+.npc-btn--primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.npc-btn--ghost{background:0 0;border:.5px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary)}
+.npc-btn--ghost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.npc-btn:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}
+.npc-btn:disabled{opacity:.4;cursor:default}
+.npc-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.npc-note--dirty{color:var(--dsw-alias-label-secondary)}
+.npc-note--ok{color:var(--dsw-alias-state-success-primary)}
+.npc-note--warn{color:var(--dsw-alias-state-warn-label,var(--dsw-alias-label-secondary))}
+.npc-note--error{color:var(--dsw-alias-state-error-primary)}
+.npc-pre{margin:0;padding:12px;font-family:var(--ds-font-family-code,monospace);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-module-platform);border-radius:var(--dsw-radius-lg);overflow-x:auto;white-space:pre-wrap}
+@media (prefers-reduced-motion:reduce){.npc-summary:before{transition:none}}
+`
 
       /** 解包 Remote 结果：{ ok, value } / { ok:false, error }。 */
       function unwrap(result) {
@@ -198,12 +268,12 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         return raw.split(/[,，\s]+/).map((item) => item.trim()).filter((item) => item !== '')
       }
 
-      function renderField(field, value, onChange) {
+      function renderField(field, value, onChange, disabled) {
         const id = NS + '-' + field.key
         if (field.kind === 'boolean') {
-          return react.createElement('div', { style: style.checkRow, key: field.key },
+          return react.createElement('div', { className: 'npc-check npc-field--wide', key: field.key },
             react.createElement('input', {
-              id, type: 'checkbox', checked: Boolean(value),
+              id, type: 'checkbox', checked: Boolean(value), disabled: Boolean(disabled),
               onChange: (event) => onChange(field.key, event.target.checked),
             }),
             react.createElement('label', { htmlFor: id }, field.label))
@@ -211,38 +281,80 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         let control
         if (field.kind === 'select') {
           control = react.createElement('select', {
-            id, style: style.input, value: value == null ? '' : String(value),
+            id, className: 'npc-input', value: value == null ? '' : String(value), disabled: Boolean(disabled),
             onChange: (event) => onChange(field.key, event.target.value),
           }, field.options.map((pair) => react.createElement('option', { key: pair[0], value: pair[0] }, pair[1])))
         } else if (field.kind === 'number') {
           control = react.createElement('input', {
-            id, type: 'number', style: style.input, value: value == null ? '' : String(value),
+            id, type: 'number', className: 'npc-input', value: value == null ? '' : String(value), disabled: Boolean(disabled),
             onChange: (event) => onChange(field.key, event.target.value === '' ? undefined : Number(event.target.value)),
           })
         } else if (field.kind === 'textarea') {
           control = react.createElement('textarea', {
-            id, style: Object.assign({}, style.input, { minHeight: '96px', fontFamily: 'inherit' }),
-            placeholder: field.placeholder, value: value == null ? '' : String(value),
+            id, className: 'npc-input', style: { minHeight: '88px' },
+            placeholder: field.placeholder, value: value == null ? '' : String(value), disabled: Boolean(disabled),
             onChange: (event) => onChange(field.key, event.target.value),
           })
         } else if (field.kind === 'list') {
           // value 这里就是原始文本（不是数组）：输入过程中逗号/空格原样保留，
           // 由调用方在 onChange 里解析成数组，避免"刚敲下的逗号被吃掉"。
           control = react.createElement('input', {
-            id, type: 'text', style: style.input, placeholder: field.placeholder,
-            value: value == null ? '' : String(value),
+            id, type: 'text', className: 'npc-input', placeholder: field.placeholder,
+            value: value == null ? '' : String(value), disabled: Boolean(disabled),
             onChange: (event) => onChange(field.key, event.target.value),
           })
         } else {
           control = react.createElement('input', {
-            id, type: field.kind === 'password' ? 'password' : 'text', style: style.input,
-            placeholder: field.placeholder, value: value == null ? '' : String(value),
+            id, type: field.kind === 'password' ? 'password' : 'text', className: 'npc-input',
+            placeholder: field.placeholder, value: value == null ? '' : String(value), disabled: Boolean(disabled),
             onChange: (event) => onChange(field.key, event.target.value),
           })
         }
-        return react.createElement('div', { style: style.row, key: field.key },
-          react.createElement('label', { style: style.label, htmlFor: id }, field.label),
+        return react.createElement('div', { className: 'npc-field' + (field.kind === 'textarea' ? ' npc-field--wide' : ''), key: field.key },
+          react.createElement('label', { className: 'npc-label', htmlFor: id }, field.label),
           control)
+      }
+
+      /** 把一组字段 key 渲染成网格；key 一定在 FIELDS 里（启动时已核过）。 */
+      function renderGroupFields(keys, draft, onChange, disabled) {
+        return keys.map((key) => renderField(FIELD_BY_KEY[key], draft[key], onChange, disabled))
+      }
+
+      function DraftPage(props) {
+        const { draft, revision, writable, onChange, onSave, onReload, message } = props
+        const disabled = writable !== true
+        const dirty = JSON.stringify(draft) !== JSON.stringify(props.loaded)
+        const cards = GROUPS.filter((group) => !group.collapsed).map((group) => react.createElement('section', { className: 'npc-card', key: group.id },
+          react.createElement('h3', { className: 'npc-card-title' }, group.title),
+          group.hint === undefined ? null : react.createElement('p', { className: 'npc-card-hint' }, group.hint),
+          react.createElement('div', { className: 'npc-grid' }, renderGroupFields(group.keys, draft, onChange, disabled))))
+        const advanced = GROUPS.filter((group) => group.collapsed).map((group) => react.createElement('details', { className: 'npc-adv', key: group.id },
+          react.createElement('summary', { className: 'npc-summary' },
+            group.title + '（' + group.keys.length + ' 项）'),
+          react.createElement('div', { className: 'npc-grid' }, renderGroupFields(group.keys, draft, onChange, disabled))))
+        return react.createElement('div', { className: 'npc-page' },
+          react.createElement('h2', { className: 'npc-title' }, 'NapCat'),
+          react.createElement('p', { className: 'npc-intro' }, 'DeepSeek Harness 的 QQ 通道：私聊 + 群聊、@ 门控、白名单、长文分段、语音与图片。保存后写入 profile 的 cordis.patch.yml 并热重载插件，不用重启宿主。'),
+          react.createElement('div', { className: 'npc-badges' },
+            react.createElement('span', { className: 'npc-badge' }, 'revision ' + (revision === undefined ? '—' : String(revision))),
+            react.createElement('span', { className: 'npc-badge' },
+              react.createElement('span', { className: 'npc-dot ' + (writable ? 'npc-dot--on' : 'npc-dot--off') }),
+              writable ? '可写' : '只读')),
+          react.createElement('div', { className: 'npc-savebar' },
+            react.createElement('span', { className: 'npc-note' + (writable ? '' : ' npc-note--warn') },
+              writable ? '保存后立即热重载插件。' : '配置文件只读或被锁定，本页只能查看，改配置文件后才能保存。'),
+            react.createElement('div', { className: 'npc-savebar-actions' },
+              react.createElement('button', {
+                type: 'button', className: 'npc-btn npc-btn--primary',
+                disabled: disabled || !dirty, onClick: () => void onSave(),
+              }, dirty ? '保存' : '已保存'),
+              react.createElement('button', {
+                type: 'button', className: 'npc-btn npc-btn--ghost', onClick: () => void onReload(),
+              }, '重新读取')),
+            message === undefined ? null
+              : react.createElement('p', { className: 'npc-note ' + (message.ok ? 'npc-note--ok' : 'npc-note--error') }, message.text)),
+          cards,
+          advanced)
       }
 
       /** 页面主体。 */
@@ -250,9 +362,10 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         const ctx = props.ctx
         const [state, setState] = react.useState({ phase: 'loading' })
         const [draft, setDraft] = react.useState({})
+        const [loaded, setLoaded] = react.useState({})
         const [revision, setRevision] = react.useState(undefined)
         const [message, setMessage] = react.useState(undefined)
-          const [writable, setWritable] = react.useState(true)
+        const [writable, setWritable] = react.useState(true)
 
         const load = react.useCallback(async () => {
           const remote = remoteOf(ctx)
@@ -280,6 +393,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
               }
             }
             setDraft(normalized)
+            setLoaded(normalized)
             setRevision(row.revision)
             setState({ phase: 'ready' })
           } catch (error) {
@@ -315,43 +429,45 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
           }
         }
 
-        if (state.phase === 'loading') return react.createElement('p', { style: style.hint }, '读取配置中…')
+        if (state.phase === 'loading') return react.createElement('p', { className: 'npc-note' }, '读取配置中…')
 
         if (state.phase === 'unsupported') {
-          return react.createElement('div', { style: style.wrap },
-            react.createElement('p', { style: style.hint }, '当前宿主没有暴露 settings Remote 域，无法在本页读写配置。可以手动在 profile 的 cordis.patch.yml 追加：'),
-            react.createElement('pre', { style: style.hint },
+          return react.createElement('div', { className: 'npc-page' },
+            react.createElement('p', { className: 'npc-intro' }, '当前宿主没有暴露 settings Remote 域，无法在本页读写配置。可以手动在 profile 的 cordis.patch.yml 追加：'),
+            react.createElement('pre', { className: 'npc-pre' },
               '- id: ' + NS + '\n  name: ' + NS + '\n  config:\n    mode: forward\n    url: ws://<napcat-ip>:3001\n    accessToken: <token>\n    adminUsers: [\'<你的QQ>\']'))
         }
 
         if (state.phase === 'missing') {
-          return react.createElement('div', { style: style.wrap },
-            react.createElement('p', { style: style.hint }, '宿主里没找到 dsh-napcat 的配置条目。确认插件已安装并启用，再点重试。'),
-            react.createElement('button', { style: style.btn, onClick: () => void load() }, '重试'))
+          return react.createElement('div', { className: 'npc-page' },
+            react.createElement('p', { className: 'npc-intro' }, '宿主里没找到 dsh-napcat 的配置条目。确认插件已安装并启用，再点重试。'),
+            react.createElement('button', { type: 'button', className: 'npc-btn npc-btn--ghost', onClick: () => void load() }, '重试'))
         }
 
         if (state.phase === 'error') {
-          return react.createElement('div', { style: style.wrap },
-            react.createElement('p', { style: style.error }, '读取配置失败：' + state.error),
-            react.createElement('button', { style: style.btn, onClick: () => void load() }, '重试'))
+          return react.createElement('div', { className: 'npc-page' },
+            react.createElement('p', { className: 'npc-note npc-note--error' }, '读取配置失败：' + state.error),
+            react.createElement('button', { type: 'button', className: 'npc-btn npc-btn--ghost', onClick: () => void load() }, '重试'))
         }
 
-        return react.createElement('div', { style: style.wrap },
-          react.createElement('p', { style: style.hint },
-            '保存后写入 profile 的 cordis.patch.yml 并热重载插件。' +
-            (revision === undefined ? '' : ' 当前 revision：' + revision)),
-          FIELDS.map((field) => renderField(field, draft[field.key], (key, value) => {
-            setDraft((previous) => {
-              const nextDraft = Object.assign({}, previous)
-              nextDraft[key] = value
-              return nextDraft
-            })
-          })),
-          react.createElement('div', { style: style.bar },
-            react.createElement('button', { style: style.primary, onClick: () => void save() }, '保存'),
-            react.createElement('button', { style: style.btn, onClick: () => void load() }, '重新读取'),
-            message === undefined ? null
-              : react.createElement('p', { style: message.ok ? style.ok : style.error }, message.text)))
+        return react.createElement(react.Fragment, null,
+          react.createElement('style', null, CSS_TEXT),
+          react.createElement(DraftPage, {
+            draft,
+            loaded,
+            revision,
+            writable,
+            message,
+            onSave: save,
+            onReload: load,
+            onChange: (key, value) => {
+              setDraft((previous) => {
+                const nextDraft = Object.assign({}, previous)
+                nextDraft[key] = value
+                return nextDraft
+              })
+            },
+          }))
       }
 
       // remote.settings = @deepseek-ai/dsh-api-settings-controller 暴露的 settings Remote 域

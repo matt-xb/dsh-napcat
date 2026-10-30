@@ -255,3 +255,22 @@
 **验证**：`node --check client/index.js` 通过；`npm test` → 124 tests, 124 pass（纯前端字段改动，不影响 lib）。
 
 **部署**：同步 `client/index.js`、`package.json`、`README.md`。**前端改动要重载插件（或刷新页面）才生效**。
+
+## 重做设置页 UI（0.3.23-xb.24，2026-10-30）
+
+**为什么改**：用户反馈设置页「太丑」「做的有点儿太简陋了，而且上下很长，我要滚动到好下面才能看得到有些东西」。旧页把 67 个字段 `FIELDS.map` 平铺一列，保存按钮排在数组之后 = 页面最底部，必须滚到底才能保存。
+
+**改法**（只动 `client/index.js`，不新增依赖、不引构建链、不碰 `src/`）：加载形态 `window.__ModuleLoader__.load({...})`（`client/index.js:20-27`）原样保留；`FIELDS` 的 key/label/kind/options/placeholder 一字未改，只在旁边加分组表。
+
+- `client/index.js:143-158` 新增 `GROUPS`：primary（常用，10 项：mode/url/accessToken/botQQ/adminUsers/dmPolicy/groupPolicy/requireMention/voiceAsrProvider/voiceTtsProvider）、connection（连接与门控 9）、session（会话与人格 3）、memory（群记忆 6）、voice（语音识别 5）、tts（语音合成 9）、aliyun（阿里云云端语音 2）、advanced（`collapsed:true`，23 项）。
+- `client/index.js:161-181` 新增 `FIELD_BY_KEY` 索引 + 漏项兜底：分组表没写到的字段自动并入 advanced 并 `console.warn`，字段不会静默消失；重复 key 也被过滤。
+- `client/index.js:186-232` 原内联 style 对象换成 `CSS_TEXT` 模板串，类名统一 `npc-*`：`.npc-savebar{position:sticky;bottom:0;…}`（吸底保存条，`border-top` 分隔 + `var(--dsw-alias-bg-layer-2)` 底色）、`.npc-card`（宿主卡片 stroke/fill/`--dsw-radius-xl`）、`.npc-grid{repeat(auto-fit,minmax(240px,1fr))}`（适配宿主 564px 可用宽，不再写死 620px）。全部走宿主 `var(--dsw-*)` token，没有自创颜色。
+- `client/index.js:271-317` `renderField(field, value, onChange, disabled)` 加第 4 个参数，改用 className（32px 输入框、36px 按钮、focus 环同宿主）。
+- `client/index.js:319-355` 新增 `renderGroupFields` 与 `DraftPage(props)`：标题 + 说明 + revision/可写徽标 → 吸底保存条 → 分组卡片 → `<details>` 高级设置（summary 带「N 项」，箭头样式抄宿主 models 页）。
+- `client/index.js:361-478` `NapcatSettingsPage` 加 `const [loaded, setLoaded] = react.useState({})`，`load()` 里 `setLoaded(normalized)`；`dirty = JSON.stringify(draft) !== JSON.stringify(props.loaded)`，未改动时按钮文案「已保存」且 disabled；只读（`writable !== true`）时按钮置灰并显示原因（复用此前只写不读的 `writable` 状态）。`save()/load()/toList()/unwrap()/remoteOf()` 语义完全未动。
+
+**验证**：`node --check client/index.js` 通过；用临时 react 桩跑渲染冒烟（不在仓库里）——控件 67 个（input 57 / select 9 / textarea 1）一个没丢，页面类名 24 个全部在 `CSS_TEXT` 里有定义，无改动时保存按钮 disabled、改 `botQQ` 后可点，readonly 时出现只读提示且徽标转 `npc-dot--off`。`npm run typecheck` / `npm run build` 通过；`npm test` → **126 tests, 126 pass, 0 fail**。
+
+**交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.24.tgz`（shasum `799612f2fd16d5688a34cf12039ccf9fc93c0322`），已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（旧版备份在 `C:\Users\Administrator\.dsh\profiles\desktop\backup-dsh-napcat-xb.23-20261030115213`），`diff -r` 核对 tarball 的 `client/`、`lib/`、`package.json` 与安装目录一致。安装时因 profile 里既有的 `@wenbin_wb/dsh-bridge` peer 冲突（要 `@deepseek-ai/dsh-llm@>=0.1.0-rc.6` 解析到 0.1.0-rc.8，实际装 0.2.1-rc.5）必须加 `--legacy-peer-deps`；副作用是清掉插件嵌套 `node_modules` 里 111 个与宿主重复的包（`@deepseek-ai/*`、`@types/ws`、`typescript`），`ws`、`@xenova/transformers`、`onnxruntime-node`、`sharp` 均仍在且可解析。
+
+**未验证 / 需注意**：**没有重启 DSH，也没有在真实 GUI 里看过这页**——样式是按宿主 CSS 变量抄的，实际观感要刷新宿主客户端（前端改动重载插件或刷新页面即可，不需要重启宿主）后才能确认。
