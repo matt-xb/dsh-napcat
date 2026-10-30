@@ -199,10 +199,16 @@ function stripRuntimeContext(text: string): string {
 /** 行首伪角色标记：模型复述会话内部记录时会写 `User: …` / `助手: …`，或单起一行的 `assistant`。 */
 const DIALOG_LINE = /^[ \t]*(?:(?:User|Human|Assistant|助手)[ \t]*[:：]|(?:User|Human|Assistant|助手)[ \t]*$)/im
 
+/** 宿主注入的内部通知块（`<system_warning>` / `<system_reminder>`）：模型会整段当正文复述出去。 */
+// shortcut: 代码块里写同样的标签也会被砍，真要在群里贴这种样例时再按行放行。
+const HOST_NOTICE_BLOCK = /<system_(?:warning|reminder)>[\s\S]*?(?:<\/system_(?:warning|reminder)>|$)/gi
+
 /** Internal context must never be forwarded to QQ. */
 export function sanitizeReply(text: string): string | null {
-  const clean = text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, '')
-  if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(clean.replace(/\s+/g, ''))) return null
+  const raw = text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, '')
+  if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(raw.replace(/\s+/g, ''))) return null
+  // 未闭合的也从开始标签砍到结尾，宁可少发也不外泄。
+  const clean = raw.replace(HOST_NOTICE_BLOCK, '')
   // 复述聊天记录不是回复：`User: …` 之后的内容整段砍掉，否则等于把历史又播一遍
   const replayed = clean.search(DIALOG_LINE)
   // shortcut: 代码块里写 `User: ` 也会被砍，真出现再说

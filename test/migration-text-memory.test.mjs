@@ -48,6 +48,27 @@ test('runtime time-context quoted by the model is stripped, real prose untouched
   assert.equal(sanitizeReply('Elapsed since the preceding model-visible message: 这是我编的句子'), 'Elapsed since the preceding model-visible message: 这是我编的句子')
 })
 
+test('host notice blocks quoted by the model are stripped, unclosed ones cut to the end', () => {
+  // 现场：群里把宿主注入的 <system_warning> 整块当正文发了出去。
+  const cases = [
+    // 成对标签：块内多行一并删掉，前后正文保留。
+    ['在呢，还想着语音的事？\n<system_warning>上一轮工具调用：回复内容被拦截，可能错误地向外转发或写入。\n请只针对用户请求的改动继续，重试会被拒绝。</system_warning>', '在呢，还想着语音的事？'],
+    ['<system_reminder>本轮上下文</system_reminder>', ''],
+    ['前一句<system_reminder>内部提醒</system_reminder>后一句', '前一句后一句'],
+    // 未闭合：从开始标签一路砍到结尾。
+    ['改完了\n<system_warning>回复内容被拦截，不再重试该动作。', '改完了'],
+    ['开头<system_reminder>没闭合', '开头'],
+    // 正文+标签混排：标签剥掉，正文按原样留着。
+    ['先说明一句\n<system_warning>警告内容</system_warning>\n再补一句', '先说明一句\n再补一句'],
+    ['两个块<system_warning>a</system_warning>中间<system_reminder>b</system_reminder>结尾', '两个块中间结尾'],
+    // 正常聊天里提到标签名（不是真标签块）不受影响。
+    ['群友问 system_warning 是啥意思', '群友问 system_warning 是啥意思'],
+  ]
+  for (const [input, expected] of cases) assert.equal(sanitizeReply(input), expected)
+  // 剥干净后由外发校验兜底，不会发空消息。
+  assert.throws(() => sanitizeOutgoingMessage('<system_warning>只剩这个块</system_warning>'), /空消息/)
+})
+
 test('wrapper tags and local media paths never reach QQ as text', () => {
   // 模型自己吐的包装标签：整行只剩标签就删，夹在正文里也删。
   assert.equal(sanitizeReply('还在改，没修完\n</output>'), '还在改，没修完')
