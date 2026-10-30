@@ -136,3 +136,28 @@ test('标签计入 600 字上限', async () => {
   assert.equal(called, 0)
   assert.ok(logs.some(item => item.message.includes('600')))
 })
+
+test('不支持标签的模型遇到情绪时 warn 一句（避免以为参数生效）', async () => {
+  logs.length = 0
+  const config = { ...baseConfig, aliyunTtsModel: 'qwen3-tts-flash', ttsEmotion: 'happy' }
+  const seen = {}
+  const wav = await synthesizeAliyun('你好', config, log, { fetch: fakeFetch(seen) })
+  try {
+    assert.equal(seen.request.body.input.text, '你好', '标签仍然不插入')
+    assert.ok(logs.some(item => item.level === 'warn' && item.message.includes('不支持情感标签')))
+  } finally {
+    if (wav !== null) await rm(wav, { force: true })
+  }
+})
+
+test('calm 且模型不支持标签时不 warn（本来就没情绪）', async () => {
+  logs.length = 0
+  const config = { ...baseConfig, aliyunTtsModel: 'qwen3-tts-flash', ttsEmotion: 'calm' }
+  const seen = {}
+  const wav = await synthesizeAliyun('你好', config, log, { fetch: fakeFetch(seen) })
+  try {
+    assert.equal(logs.some(item => item.message.includes('不支持情感标签')), false)
+  } finally {
+    if (wav !== null) await rm(wav, { force: true })
+  }
+})

@@ -147,6 +147,10 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
   const model = String(config.aliyunTtsModel ?? '').trim() || 'qwen3-tts-flash'
   const emotionSupport = supportsEmotionTag(model)
   const tagged = emotionSupport ? applyEmotionTag(text, config.ttsEmotion) : text
+  // 这套模型没有情感标签能力，emotion 会被静默丢掉——不吭声会让人以为参数已生效。
+  if (!emotionSupport && emotionTag(config.ttsEmotion) !== '') {
+    log('warn', '模型 ' + model + ' 不支持情感标签，情绪 ' + String(config.ttsEmotion) + ' 已忽略；要情绪换 qwen-audio-3.1-tts-flash（音色需带 _v3.1 后缀）')
+  }
   if (tagged.length > MAX_TTS_CHARS) {
     // shortcut: 一次只合成 600 字以内，超长不回退本机 TTS（这台机器没装），交给上层改发文字。
     log('warn', '云端合成单次上限 ' + MAX_TTS_CHARS + ' 字符，本次 ' + tagged.length + ' 字，跳过')
