@@ -243,3 +243,15 @@
 **部署**：运行副本 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat\` 同步 `lib/` 与 `package.json`、`README.md`。**新配置字段需重载插件后设置页才出现**。
 
 **未做的**：`aliyunBaseUrl`（地域化工作空间域名）没做成配置，`src/aliyun.ts` 里 `BASE_URL` 常量写死 `https://dashscope.aliyuncs.com`；要用私有部署域名改那一行。云端音色是阿里自带系统音色（`Cherry` 等），与原「银月」≠ 同一个声音，声音复刻需要另开服务。
+
+## 改进：云端音色改成下拉框（0.3.23-xb.21，2026-10-30）
+
+**为什么改**：用户去阿里云百炼控制台找「选语音 / ASR / TTS」的地方，找不到；xb.20 把 `aliyunTtsVoice` 做成了自由文本框，用户得自己去查 voice 参数名（`Cherry`、`Ethan`…），无从下手。
+
+**改法**：`client/index.js` 顶部加 `ALIYUN_VOICES` 常量（48 项，取自官方音色列表 <https://help.aliyun.com/zh/model-studio/qwen-tts-voice-list> 的**非实时**合成那张表），`aliyunTtsVoice` 从 `kind: 'text'` 改成 `kind: 'select'`。选项左值是 API 里传的 voice 参数（如 `Cherry`），右值是中文名 + 性别 + 一句话特点（如 `芊悦 · 女 · 阳光亲切`），用户在设置页直接认得出来。
+
+**没动的**：`src/config.ts` 里 `aliyunTtsVoice` 仍是 `z.string()`，不做枚举校验——阿里以后加音色不用跟着改代码，手填生僻音色也还能存进去。下拉只是给人用的。
+
+**验证**：`node --check client/index.js` 通过；`npm test` → 124 tests, 124 pass（纯前端字段改动，不影响 lib）。
+
+**部署**：同步 `client/index.js`、`package.json`、`README.md`。**前端改动要重载插件（或刷新页面）才生效**。

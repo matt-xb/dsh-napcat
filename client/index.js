@@ -28,6 +28,38 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
 
       const react = require('react')
 
+      /**
+       * qwen3-tts-flash（非实时）官方音色，取自
+       * https://help.aliyun.com/zh/model-studio/qwen-tts-voice-list
+       * 左列是 API 里传的 voice 参数，右列是控制台/文档里的中文名。
+       */
+      const ALIYUN_VOICES = [
+        ['Cherry', '芊悦 · 女 · 阳光亲切'], ['Serena', '苏瑶 · 女 · 温柔'],
+        ['Ethan', '晨煦 · 男 · 阳光活力'], ['Chelsie', '千雪 · 女 · 二次元'],
+        ['Momo', '茉兔 · 女 · 撒娇搞怪'], ['Vivian', '十三 · 女 · 小暴躁'],
+        ['Moon', '月白 · 男 · 率性'], ['Maia', '四月 · 女 · 知性'],
+        ['Kai', '凯 · 男 · 松弛'], ['Nofish', '不吃鱼 · 男 · 设计师'],
+        ['Bella', '萌宝 · 女 · 小萝莉'], ['Jennifer', '詹妮弗 · 女 · 电影质感'],
+        ['Ryan', '甜茶 · 男 · 戏感'], ['Katerina', '卡捷琳娜 · 女 · 御姐'],
+        ['Aiden', '艾登 · 男 · 大男孩'], ['Eldric Sage', '沧明子 · 男 · 老者'],
+        ['Mia', '乖小妹 · 女 · 温顺'], ['Mochi', '沙小弥 · 男 · 小大人'],
+        ['Bellona', '燕铮莺 · 女 · 洪亮'], ['Vincent', '田叔 · 男 · 烟嗓'],
+        ['Bunny', '萌小姬 · 女 · 萌'], ['Neil', '阿闻 · 男 · 新闻'],
+        ['Elias', '墨讲师 · 女 · 讲解'], ['Arthur', '徐大爷 · 男 · 质朴'],
+        ['Nini', '邻家妹妹 · 女 · 软黏'], ['Seren', '小婉 · 女 · 助眠'],
+        ['Pip', '顽屁小孩 · 男 · 调皮'], ['Stella', '少女阿月 · 女 · 甜美'],
+        ['Bodega', '博德加 · 男 · 西班牙大叔'], ['Sonrisa', '索尼莎 · 女 · 拉美大姐'],
+        ['Alek', '阿列克 · 男 · 俄式'], ['Dolce', '多尔切 · 男 · 慵懒'],
+        ['Sohee', '素熙 · 女 · 韩系'], ['Ono Anna', '小野杏 · 女 · 青梅'],
+        ['Lenn', '莱恩 · 男 · 德式'], ['Emilien', '埃米尔安 · 男 · 浪漫'],
+        ['Andre', '安德雷 · 男 · 磁性'], ['Radio Gol', '拉迪奥·戈尔 · 男 · 解说'],
+        ['Jada', '上海-阿珍 · 女 · 沪语'], ['Dylan', '北京-晓东 · 男 · 京腔'],
+        ['Li', '南京-老李 · 男 · 南京话'], ['Marcus', '陕西-秦川 · 男 · 陕西话'],
+        ['Roy', '闽南-阿杰 · 男 · 闽南语'], ['Peter', '天津-李彼得 · 男 · 相声'],
+        ['Sunny', '四川-晴儿 · 女 · 川话'], ['Eric', '四川-程川 · 男 · 川话'],
+        ['Rocky', '粤语-阿强 · 男 · 粤语'], ['Kiki', '粤语-阿清 · 女 · 粤语'],
+      ]
+
       /** 设置页字段（与 src/config.ts 的 Config 一一对应）。 */
       const FIELDS = [
         { key: 'mode', label: '连接方式', kind: 'select', options: [['forward', 'forward：插件连 NapCat'], ['reverse', 'reverse：NapCat 拨入']] },
@@ -75,7 +107,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'aliyunApiKey', label: '阿里云百炼 API Key（只填本机，别提交仓库）', kind: 'password', placeholder: 'sk-…' },
         { key: 'aliyunAsrModel', label: '云端识别模型（默认 qwen3-asr-flash）', kind: 'text', placeholder: 'qwen3-asr-flash' },
         { key: 'aliyunTtsModel', label: '云端合成模型（默认 qwen3-tts-flash）', kind: 'text', placeholder: 'qwen3-tts-flash' },
-        { key: 'aliyunTtsVoice', label: '云端音色（系统音色名，默认 Cherry）', kind: 'text', placeholder: 'Cherry' },
+        { key: 'aliyunTtsVoice', label: '云端音色（只对 aliyun 后端有效）', kind: 'select', options: ALIYUN_VOICES },
         { key: 'ttsEnabled', label: '发语音：开启（本机 TTS 合成后发语音消息）', kind: 'boolean' },
         { key: 'ttsServerUrl', label: 'TTS 服务地址（默认 http://127.0.0.1:9880）', kind: 'text' },
         { key: 'ttsVoiceRef', label: '音色参考音频路径', kind: 'text' },

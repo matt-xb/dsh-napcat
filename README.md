@@ -13,7 +13,7 @@ QQ 用户 <──回复──── NapCat <──动作(WS)────┘   �
 
 自己维护的一份实现：功能按需长，结构保持薄（连接层 / 会话桥 / 工具 / 配置四块，互不缠绕）。
 
-**当前分支版本 v0.3.23-xb.20（预发布，实机验收待完成）**。
+**当前分支版本 v0.3.23-xb.21（预发布，实机验收待完成）**。
 
 普通闲聊默认一句短话，不展开分析接话意图；自动回复的短中文纯文本会合并换行。代码、列表、链接和长正文不做此压行处理，后台任务结果及显式文字工具不改写。短句要求由模型生成，不靠截断正文实现；实际效果需重载后的QQ聊天验收。
 
@@ -336,7 +336,7 @@ dsh plugin --profile web add /path/to/dsh-napcat
 | `aliyunApiKey` | `''` | 阿里云百炼（DashScope）API Key；`role: secret`，只填本机，别提交仓库 |
 | `aliyunAsrModel` | `qwen3-asr-flash` | 云端识别模型 |
 | `aliyunTtsModel` | `qwen3-tts-flash` | 云端合成模型 |
-| `aliyunTtsVoice` | `Cherry` | 云端系统音色名（与本机参考音频音色不同，声音复刻另说） |
+| `aliyunTtsVoice` | `Cherry` | 云端音色（设置页是下拉框，48 个官方音色任选）。**注意和本机音色预设不是一套**：`ttsVoice`/`ttsVoices` 是本地 IndexTTS 的参考音频，云端用不到；云端音色是阿里系统音色，最接近「银月」的偏少女/温柔系可以试 `Stella`、`Nini`、`Chelsie` |
 | `ttsVoices` | `{原版: …/original_ref.wav, 银月: …/yinyue_ref_n24.wav}` | 音色预设：名字 → 参考音频绝对路径（`原版` 走 `original_ref.wav`，因为服务端 legacy 名单会把 `u3.wav` 强制映射成银月） |
 | `ttsVoice` | `银月` | 当前使用的音色预设名（模型可用 `napcat_voice` 运行时切换，不必改配置） |
 | `ttsAutoStart` | `true` | TTS 服务没起时自动拉起（仅本机；连不上 9880 时用 `NAPCAT_TTS_PYTHON`（默认 `D:\NapCat\tts\index-tts\.venv\Scripts\python.exe`）配 `NAPCAT_TTS_SERVER`（默认 `D:\NapCat\tts\tts_server.py`）启动，轮询 `/health` 最多 90 秒后重试一次，日志写 `D:\NapCat\tts\logs\tts_server.out`；路径不存在则跳过自愈按原样报错） |
