@@ -383,3 +383,30 @@
 **交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.27.tgz`（sha1 `6f1b68fce5efb9040ba59cf8657e560dc03ed1ae`，sha256 `9b39827facc46a78f963dbafcee29695339b58bc47810d596a2c544f1eb65233`，135893 字节）。已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（旧版备份 `backup-dsh-napcat-xb.26-20261030131500`），profile `package.json` 依赖已指向新 tgz，`npm install --legacy-peer-deps` 安装，`diff -r` 核对 `lib/`、`client/` 与新包逐字节一致（无输出），`package.json` 语义一致（npm 安装时按自己的格式重排了缩进），安装后 version = `0.3.23-xb.27`，用装好的 `lib/aliyun.js` 冒烟：`supportsEmotionTag` 对新/旧模型返回 `true/false`，`applyEmotionTag('你好','happy')='[excited]你好'`、`('你好','calm')='你好'`、`('[sad]你好','happy')='[sad]你好'`，`emotionTag('嫌弃')='[scornful]'`。
 
 **未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里用新模型发过语音**——真正听感要重载插件、把设置页 `aliyunTtsModel` 改成 `qwen-audio-3.1-tts-flash`、`aliyunTtsVoice` 改成 `longanhuan_v3.1` 之类之后才能确认。`.tmp-probe/` 是前序探查留下的未跟踪目录，本次未动也未提交。
+
+## 修复：wav 头尺寸回填与退化音频拒收（0.3.23-xb.28，2026-10-30）
+
+**用户反馈**：发出去的语音最后一点尾音被截断，像是没说完就断了。
+
+**排查结论（如实记录）**：插件、NapCat 转换、silk 回解三环都**没有**裁剪。
+
+- 插件侧全仓 grep `ffmpeg` / `atrim` / `fade` / `-t` / `silk` / `resample` 零命中；`git log -S atrim|fade|silenceremove|ffmpeg|sox -- src` 全空 → 这个仓库从没有过按时长估算裁剪、紧 `-t`、提前 fade 或二次转码的代码。`src/tts.ts` / `src/aliyun.ts` 拿到 buffer 后原样 `writeFile`；`src/tools.ts:411/424`、`:461/470` 直接发 record，无二次转码。
+- 实测 85 个真实产物逐个 wav → silk → PCM：`lost = rawSamples - pcmSamples` **全部为 0**；最长样本 333.60s（16012844 字节）也 `diff 0`、`getDuration` 报 333.6。
+- `.tmp-probe/probe-partial.cjs` 证明 ntsilk 编码器对不满 20ms 的尾帧是**向上补齐**到 480 边界（cut 240 → 反而多 240），不可能丢尾。
+- 阿里云服务端返回内容完整：ASR 回读逐字一致，尾部 1–3 个 20ms 有自然静音收尾；`content-length` 与实收字节每次相等。
+
+因此**「听感被截断」在采样/编码/时长三层都复现不出来**，最可能的真实机制是播放端按 wav 头声明的长度解析。阿里云 qwen-tts 返回的是流式 wav，头里 RIFF size 写 `0x7FFFFFFF`、data size 写 `0x7FFFFF9B`（实测 257324 字节文件声明 data=2147483547），`ffprobe` 对它报 `Estimating duration from bitrate, this may be inaccurate`。
+
+**改动**：
+
+- 新增 `src/wav.ts`：`parseWav(buffer)`（按 chunk 遍历，`data` 声明长度超过实际字节时按实际算，`fmt` 缺失 / 参数为 0 / data 不足一帧一律抛错）、`normalizeWav(buffer)`（把 RIFF size 与 data size 回填成真实值，音频字节一个不动，本来就正确的头返回原 buffer 不拷贝）。`WavInfo` 导出 `{channels, sampleRate, bitsPerSample, dataOffset, dataLength}`。
+- `src/aliyun.ts:169-174`：`isWav` 时先 `normalizeWav` 再落盘，回填过就写一条 debug 日志；退化音频抛错走原有 catch → `return null`，上层照旧回退文字。
+- `src/tts.ts:136-140`：本机 IndexTTS 分支同样 `normalizeWav` 后落盘。
+- `test/wav-fixture.mjs`：`makeWav(samples=480, {placeholderHeader})` 生成 24kHz/16bit/mono 的合法 wav，可造 `0x7FFFFFFF` 占位头。四个原本手搓 `Buffer.alloc(48)` 假 wav 的测试文件（`aliyun-voice`、`aliyun-emotion`、`tts-autostart`、`voice-preset`）改用它——那枚空壳此前会被原样写进真实临时目录（`tmpdir()/dsh-napcat/` 里累积了 68 个 48 字节文件就是 `npm test` 留下的）。
+- `test/wav-normalize.test.mjs` 新增 8 项：占位头按实际算长度、回填不改音频字节且不就地改原 buffer、正确头不动、空壳/无音频帧拒收、两条合成分支落盘头正确、空壳返回 null 且留 warn。
+
+**验证**：`npm run typecheck` / `npm run build` 通过；`npm test` → **143 tests, 143 pass, 0 fail**（基线 135 + 新增 8）。真机走阿里云：落盘后 `bytes 249644 riffSize 249636（=bytes-8）dataSize 249600（=bytes-44）`，5.20s，头不再是占位值。新增 3 个 5.20s 样本再转 silk：samples 与原 wav 相等、lost 0。`npm test` 跑完临时目录新增的 4 个文件全是 1924 字节的真实 wav，48 字节空壳**新增为 0**。
+
+**交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.28.tgz`（sha1 `c188d02e059c8d696fab55117a853ded4f9ca219`，sha256 `eb7f18803c6c12481c1243ced29f1fa9e317e212efb31d16a6b0d9d6ac8e6749`，137541 字节，52 个文件）。已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`，profile `package.json` 第 10 行指向新 tgz，`npm install --legacy-peer-deps`，`diff -r` 核对 `lib/`、`client/` 与源码无差异，安装后 version = `0.3.23-xb.28`，用装好的 `lib/wav.js` 冒烟 `normalizeWav` 对占位头返回 `fixed=true riff=1956 data=1920`（期望 1920）。commit `910c8d0`，`origin/main...HEAD` = `0 0`。
+
+**未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里听过新包发出去的语音**——听感是否恢复需要重载插件后实听。尾音截断本身在采样层不可复现，本次修的是可证的坏头与空壳放行；若重载后仍能听到截断，下一步要抓 QQ 侧收到的 ptt 原件（本机 `AppData/Roaming/Tencent/QQ` 下没有可读的语音文件，NapCat 日志目录也没开）。
