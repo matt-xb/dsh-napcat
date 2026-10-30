@@ -1,19 +1,26 @@
 /**
- * 语音转文字（"耳朵"）：QQ 语音段 → OneBot get_record（服务端转 wav）→ whisper.cpp 出文本。
+ * 语音转文字（"耳朵"）：QQ 语音段 → OneBot get_record（服务端转 wav）→ 文本。
  *
- * 不引第三方依赖：转码用 NapCat 自带的 ffmpeg addon（get_record 的 out_format），
- * 识别用本机 whisper-cli 子进程。任何一步失败都抛错，由调用方回退 [语音] 占位符。
+ * 识别后端两选一（config.voiceAsrProvider）：本机 whisper.cpp 子进程，或阿里云百炼 qwen3-asr-flash。
+ * 不引第三方依赖：转码用 NapCat 自带的 ffmpeg addon（get_record 的 out_format）。
+ * 任何一步失败都抛错，由调用方回退 [语音] 占位符；云端失败不会偷偷改跑本机模型。
  */
 
 import { spawn } from 'node:child_process'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { transcribeAliyun } from './aliyun.js'
 import type { Config } from './config.js'
 import { base64UrlToBuffer, ensureTempDir } from './media.js'
 import type { LogLevel, OneBotConnection } from './onebot.js'
 
 type Log = (level: LogLevel, message: string) => void
+
+/** 测试注入点：云端识别用的 fetch，默认全局 fetch。 */
+export interface VoiceDeps {
+  fetch?: typeof fetch
+}
 
 /** 串行队列：whisper 每次都要加载整个模型，并发跑只会互相抢显存/内存。 */
 let queue: Promise<unknown> = Promise.resolve()
@@ -22,15 +29,15 @@ let pending = 0
 const MAX_PENDING = 2
 
 /** 把一条语音转成文本；失败/超时直接抛错。调用方负责兜底。 */
-export function transcribeRecord(conn: OneBotConnection, fileRef: string, config: Config, log: Log): Promise<string> {
+export function transcribeRecord(conn: OneBotConnection, fileRef: string, config: Config, log: Log, deps: VoiceDeps = {}): Promise<string> {
   if (pending >= MAX_PENDING) return Promise.reject(new Error('语音识别排队已满（' + pending + ' 条），跳过'))
   pending += 1
-  const run = queue.then(() => transcribeOnce(conn, fileRef, config, log)).finally(() => { pending -= 1 })
+  const run = queue.then(() => transcribeOnce(conn, fileRef, config, log, deps)).finally(() => { pending -= 1 })
   queue = run.catch(() => undefined)
   return run
 }
 
-async function transcribeOnce(conn: OneBotConnection, fileRef: string, config: Config, log: Log): Promise<string> {
+async function transcribeOnce(conn: OneBotConnection, fileRef: string, config: Config, log: Log, deps: VoiceDeps): Promise<string> {
   const dir = await ensureTempDir()
   const stem = join(dir, 'voice-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8))
   const wav = stem + '.wav'
@@ -39,7 +46,10 @@ async function transcribeOnce(conn: OneBotConnection, fileRef: string, config: C
     const info = await conn.call<{ base64?: string }>('get_record', { file: fileRef, out_format: 'wav' })
     const raw = typeof info?.base64 === 'string' ? info.base64 : ''
     if (raw === '') throw new Error('get_record 没有返回 base64')
-    await writeFile(wav, base64UrlToBuffer(raw))
+    const audio = base64UrlToBuffer(raw)
+    // 云端识别不需要落盘，也不用等本机模型；失败直接抛，由调用方回退 [语音]。
+    if (String(config.voiceAsrProvider ?? 'local') === 'aliyun') return await transcribeAliyun(audio, config, log, { fetch: deps.fetch })
+    await writeFile(wav, audio)
     await runWhisper(config.voiceWhisperBin, [
       '-m', config.voiceWhisperModel,
       '-f', wav,

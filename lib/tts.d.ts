@@ -1,8 +1,9 @@
 /**
- * 文字转语音（"嘴"）：本机 IndexTTS 服务（HTTP）合成 wav，供 napcat_send_voice 发 record 段。
+ * 文字转语音（"嘴"）：合成 wav，供 napcat_send_voice 发 record 段。
  *
- * 不引第三方依赖：直接 fetch 本地 /tts。任何一步失败都返回 null 并记日志，由调用方降级。
- * 服务没起来（ECONNREFUSED / fetch failed）时自动拉起一次，等 /health 就绪后重试一次。
+ * 后端两选一（config.voiceTtsProvider）：本机 IndexTTS 服务（HTTP），或阿里云百炼 qwen3-tts-flash。
+ * 不引第三方依赖：本地直接 fetch /tts，云端用原生 fetch。任何一步失败都返回 null 并记日志，由调用方降级。
+ * 本机服务没起来（ECONNREFUSED / fetch failed）时自动拉起一次，等 /health 就绪后重试一次。
  */
 import { spawn } from 'node:child_process';
 import type { Config } from './config.js';

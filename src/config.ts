@@ -84,6 +84,14 @@ export interface Config {
   voiceWhisperModel: string
   voiceLanguage: string
   voiceTimeoutMs: number
+  /** 语音识别后端：local=本机 whisper.cpp；aliyun=阿里云百炼 qwen3-asr。 */
+  voiceAsrProvider: string
+  voiceTtsProvider: string
+  /** 阿里云百炼 API Key（只在本机配置里，别进 git）。 */
+  aliyunApiKey: string
+  aliyunAsrModel: string
+  aliyunTtsModel: string
+  aliyunTtsVoice: string
   ttsEnabled: boolean
   ttsServerUrl: string
   /** 音色预设：名字 → 参考音频绝对路径。 */
@@ -181,6 +189,12 @@ export const Config: Z<Config> = z.object({
   voiceWhisperModel: z.string().default('D:/NapCat/stickers/_whisper/models/ggml-large-v3-turbo.bin').description('whisper 模型路径（推荐 large-v3-turbo）').volatile(),
   voiceLanguage: z.string().default('zh').description('识别语言（zh=中文，auto=自动检测）').volatile(),
   voiceTimeoutMs: z.natural().default(30000).description('单条语音识别超时（毫秒），超时回退 [语音]').volatile(),
+  voiceAsrProvider: z.union([z.const('local'), z.const('aliyun')]).default('local').description('语音识别后端：local=本机 whisper.cpp；aliyun=阿里云百炼 qwen3-asr-flash（云端，按秒计费）').volatile(),
+  voiceTtsProvider: z.union([z.const('local'), z.const('aliyun')]).default('local').description('语音合成后端：local=本机 IndexTTS；aliyun=阿里云百炼 qwen3-tts-flash（云端，按字符计费）').volatile(),
+  aliyunApiKey: z.string().role('secret').default('').description('阿里云百炼 API Key（DashScope；只填在本机配置里，不要提交到仓库）').volatile(),
+  aliyunAsrModel: z.string().default('qwen3-asr-flash').description('云端识别模型（默认 qwen3-asr-flash）').volatile(),
+  aliyunTtsModel: z.string().default('qwen3-tts-flash').description('云端合成模型（默认 qwen3-tts-flash）').volatile(),
+  aliyunTtsVoice: z.string().default('Cherry').description('云端音色（系统音色名，如 Cherry；与本机参考音频音色不同）').volatile(),
   ttsEnabled: z.boolean().default(true).description('发语音：开启 napcat_send_voice（本机 TTS 服务）').volatile(),
   ttsServerUrl: z.string().default('http://127.0.0.1:9880').description('本机 TTS 服务地址').volatile(),
   ttsVoices: z.dict(z.string()).default({
@@ -254,6 +268,12 @@ export const DEFAULTS: Config = {
   voiceWhisperModel: 'D:/NapCat/stickers/_whisper/models/ggml-large-v3-turbo.bin',
   voiceLanguage: 'zh',
   voiceTimeoutMs: 30000,
+  voiceAsrProvider: 'local',
+  voiceTtsProvider: 'local',
+  aliyunApiKey: '',
+  aliyunAsrModel: 'qwen3-asr-flash',
+  aliyunTtsModel: 'qwen3-tts-flash',
+  aliyunTtsVoice: 'Cherry',
   ttsEnabled: true,
   ttsServerUrl: 'http://127.0.0.1:9880',
   ttsVoices: {

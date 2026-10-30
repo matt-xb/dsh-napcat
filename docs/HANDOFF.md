@@ -214,3 +214,32 @@
 **验证**：`npm run build` 通过；`npm test` → **114 tests, 114 pass, 0 fail**（基线 111 未删未改，新增 `test/voice-scope.test.mjs` 3 条：两个 chatKey 各自 switch 互不影响、写盘后清内存能读回、未设覆盖回落 `config.ttsVoice`）。`test/voice-preset.test.mjs` 只做签名适配（`setVoiceOverride(KEY,…)`、`resolveVoiceRef(config,KEY)`、`synthesizeToWav(...,KEY)`、`napcat_voice` 带 `chat_id`），断言原样保留。
 
 **部署**：运行副本 `D:\DeepSeekHarnessData\.dsh\profiles\desktop\node_modules\dsh-napcat\` 同步 lib/*.js、lib/*.d.ts、package.json、README.md 并逐个 sha256 核对；发布包 `D:\NapCat\releases\dsh-napcat-0.3.23-xb.18.tgz`。**未重启 DSH、未重载插件、未动 9880 服务**——新逻辑需重载后才生效。
+
+## 新功能：语音收发可换阿里云百炼（0.3.23-xb.20，2026-10-30）
+
+**为什么改**：这台机器没装本机语音模型（whisper.cpp / IndexTTS），用户不想部署，要求把「听」和「说」改成阿里云百炼的云端接口。本机实现必须原样保留——别的机器（家里那台）用它。
+
+**改法**：云端只做 provider，不动上层调用链。两个开关 `voiceAsrProvider` / `voiceTtsProvider`（`local` | `aliyun`），默认 `local`，装好后在设置页手动切。
+
+**接口（官方文档，未用真实 key 验证）**：
+
+- 识别 `qwen3-asr-flash`，OpenAI 兼容端点 `POST {base}/compatible-mode/v1/chat/completions`，body `messages[0].content[0].input_audio.data` = `data:audio/wav;base64,…`，文本取 `choices[0].message.content`。同步接口，单文件 ≤10MB / ≤5 分钟（QQ 语音远小于此）。
+- 合成 `qwen3-tts-flash`，`POST {base}/api/v1/services/aigc/multimodal-generation/generation`，body `{"model","input":{"text","voice","language_type":"Chinese"}}`，返回 `output.audio.url`（24 小时 OSS 链接）→ **再 fetch 一次**拿字节。单次 ≤600 字符，超了直接回退文字。
+
+**改动**：
+
+- `src/aliyun.ts`（新增，约 170 行）：`transcribeAliyun(wav, config, log, deps)` / `synthesizeAliyun(text, config, log, deps)`；`AliyunDeps { fetch? }` 供测试注入；内部 `postJson` 统一处理 Bearer + 超时 + JSON 解析 + `code/message` 提取；`describeError` 兼容 `output.message`。合成落地为临时 wav（RIFF 判断，否则 `.mp3`）。
+- `src/voice.ts`：`transcribeRecord(conn, fileRef, config, log, deps: VoiceDeps = {})` 加第 5 个可选参数；`transcribeOnce` 拿到 base64 解成 Buffer 后先判 `voiceAsrProvider === 'aliyun'` 直走云端（不落盘、不起子进程），否则原样走 whisper。串行队列与 `MAX_PENDING=2` 不变。
+- `src/tts.ts`：`synthesizeToWav` 里云端分支**不进 `withGpu`**（那是本机显存互斥，云请求排队只是白等），直接 `synthesizeAliyun`；本机分支原样。
+- `src/config.ts`：`Config` 接口 + zod schema（`.volatile()`）+ `DEFAULTS` 三处同步加 `voiceAsrProvider`(local)、`voiceTtsProvider`(local)、`aliyunApiKey`(`z.string().role('secret')`)、`aliyunAsrModel`(qwen3-asr-flash)、`aliyunTtsModel`(qwen3-tts-flash)、`aliyunTtsVoice`(Cherry)。
+- `client/index.js`：设置页语音分组补 6 项（两个 `select`、一个 `password`、三个 `text`），并把 `voiceToText` 标签里「本机 whisper」改成「后端见下方」。
+
+**失败语义**：云端 TTS 失败返回 `null` → `napcat_send_voice` 抛「语音合成失败…改用文字发送」；云端 ASR 失败抛错 → `bridge.resolveVoice` 回退 `[语音]` 占位。**不自动降级去拉本机模型**（这台机器没装，切过去只会再等一次超时）。
+
+**验证**：`npm run build` / `typecheck` 通过；`npm test` → **124 tests, 124 pass, 0 fail**（基线含远端 xb.19 的重复发送拦截用例，新增 `test/aliyun-voice.test.mjs` 8 条：ASR 请求形状与取文本、没 key 不发请求、错误码透出、TTS 两段式拿 URL、超 600 字不请求、云端报错返回 null、`voiceTtsProvider=aliyun` 不碰 127.0.0.1、`voiceAsrProvider=aliyun` 不起 whisper）。全部假 fetch，不联网。
+
+**版本号说明**：本功能最初按 xb.19 写，提交时发现远端 `a125efc`（同轮内重复发送拦截）已占用 `0.3.23-xb.19`，故 rebase 到该提交之后改发 **xb.20**。
+
+**部署**：运行副本 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat\` 同步 `lib/` 与 `package.json`、`README.md`。**新配置字段需重载插件后设置页才出现**。
+
+**未做的**：`aliyunBaseUrl`（地域化工作空间域名）没做成配置，`src/aliyun.ts` 里 `BASE_URL` 常量写死 `https://dashscope.aliyuncs.com`；要用私有部署域名改那一行。云端音色是阿里自带系统音色（`Cherry` 等），与原「银月」≠ 同一个声音，声音复刻需要另开服务。

@@ -81,6 +81,14 @@ export interface Config {
     voiceWhisperModel: string;
     voiceLanguage: string;
     voiceTimeoutMs: number;
+    /** 语音识别后端：local=本机 whisper.cpp；aliyun=阿里云百炼 qwen3-asr。 */
+    voiceAsrProvider: string;
+    voiceTtsProvider: string;
+    /** 阿里云百炼 API Key（只在本机配置里，别进 git）。 */
+    aliyunApiKey: string;
+    aliyunAsrModel: string;
+    aliyunTtsModel: string;
+    aliyunTtsVoice: string;
     ttsEnabled: boolean;
     ttsServerUrl: string;
     /** 音色预设：名字 → 参考音频绝对路径。 */
