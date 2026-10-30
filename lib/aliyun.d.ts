@@ -12,6 +12,15 @@ type Log = (level: LogLevel, message: string) => void;
 export interface AliyunDeps {
     fetch?: typeof fetch;
 }
+/** 模型是否支持情感标签与 instruction。 */
+export declare function supportsEmotionTag(model: unknown): boolean;
+/** 情绪名 → 官方标签；不认识或平静时返回空串。 */
+export declare function emotionTag(emotion: unknown): string;
+/**
+ * 把情绪标签插到文本开头；已带官方标签时原样返回（幂等）。
+ * 注意标签本身也计入 600 字上限，所以拼接顺序是「先标签后正文」。
+ */
+export declare function applyEmotionTag(text: string, emotion: unknown): string;
 /** 语音 → 文本。失败抛错，由调用方回退 [语音]。 */
 export declare function transcribeAliyun(wav: Buffer, config: Config, log: Log, deps?: AliyunDeps): Promise<string>;
 /** 文本 → 临时 wav 路径；失败返回 null（不抛）。 */

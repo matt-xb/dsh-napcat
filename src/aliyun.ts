@@ -23,9 +23,91 @@ export interface AliyunDeps {
 /** 官方域名；换成地域化工作空间域名时改这里的默认值即可。 */
 const BASE_URL = 'https://dashscope.aliyuncs.com'
 const ASR_PATH = '/compatible-mode/v1/chat/completions'
+/** qwen3-tts-flash 走多模态端点。 */
 const TTS_PATH = '/api/v1/services/aigc/multimodal-generation/generation'
+/** Qwen-Audio-TTS（qwen-audio-3.x-tts-*）走独立合成端点，两条互不通用。 */
+const TTS_AUDIO_PATH = '/api/v1/services/audio/tts/SpeechSynthesizer'
 /** qwen3-tts-flash 单次文本上限（官方限制），超了不截断，直接让调用方回退文字。 */
 const MAX_TTS_CHARS = 600
+
+/** Qwen-Audio-TTS 系列：支持情感标签与 instruction，端点和音色后缀都和别人不同。 */
+const AUDIO_TTS_RE = /^qwen-audio-\d+(?:\.\d+)?-tts-/i
+
+/**
+ * 八维情绪 → 官方情感标签（仅 Qwen-Audio-TTS 系列，写进 text 开头）。
+ * calm 刻意不给标签：平静就该是自然语气，硬加一个标签反而会被读成某种腔调。
+ * 键与 tts.ts 的 EMOTIONS 完全对齐（英文名 + 中文别名）。
+ */
+const EMOTION_TAGS: Record<string, string> = {
+  happy: '[excited]',
+  angry: '[angry]',
+  sad: '[sad]',
+  afraid: '[trembling]',
+  disgusted: '[scornful]',
+  melancholic: '[bored]',
+  surprised: '[amazed]',
+  calm: '',
+  '高兴': '[excited]',
+  '生气': '[angry]',
+  '难过': '[sad]',
+  '害怕': '[trembling]',
+  '嫌弃': '[scornful]',
+  '没劲': '[bored]',
+  '惊讶': '[amazed]',
+  '平静': '',
+}
+
+/** 官方控制类 + 富语言类标签全集：用于判断文本里是否已经带了标签（幂等）。 */
+const KNOWN_TAGS = new Set([
+  'sad', 'amazed', 'deep and loud shouting', 'trembling', 'angry', 'excited', 'sarcastic',
+  'curious', 'like dracula', 'bored', 'tired', 'scornful', 'shouting', 'asmr', 'panicked',
+  'mischievously', 'empathetic', 'whispers', 'reluctantly', 'crying', 'serious',
+  'very slowly', 'very fast', 'gasp', 'sighing', 'clears throat', 'giggles', 'laughing',
+  'cough', 'snorts',
+])
+const ANY_TAG_RE = /\[([^\[\]]{1,40})\]/g
+
+/** 模型是否支持情感标签与 instruction。 */
+export function supportsEmotionTag(model: unknown): boolean {
+  return AUDIO_TTS_RE.test(String(model ?? '').trim())
+}
+
+/** 情绪名 → 官方标签；不认识或平静时返回空串。 */
+export function emotionTag(emotion: unknown): string {
+  const raw = String(emotion ?? '').trim()
+  if (raw === '') return ''
+  return EMOTION_TAGS[raw.toLowerCase()] ?? EMOTION_TAGS[raw] ?? ''
+}
+
+/** 文本里已有的情感标签数（只认官方标签，免得把普通方括号当成标签）。 */
+function countKnownTags(text: string): number {
+  let found = 0
+  for (const match of text.matchAll(ANY_TAG_RE)) {
+    if (KNOWN_TAGS.has(String(match[1]).trim().toLowerCase())) found += 1
+  }
+  return found
+}
+
+/**
+ * 把情绪标签插到文本开头；已带官方标签时原样返回（幂等）。
+ * 注意标签本身也计入 600 字上限，所以拼接顺序是「先标签后正文」。
+ */
+export function applyEmotionTag(text: string, emotion: unknown): string {
+  const tag = emotionTag(emotion)
+  if (tag === '' || countKnownTags(text) > 0) return text
+  return tag + text
+}
+
+/** 音色与模型明显错配时提个醒（不拦请求，官方错报比本地猜更准）。 */
+function warnVoiceMismatch(model: string, voice: string, log: Log): void {
+  const audioTts = supportsEmotionTag(model)
+  const hasSuffix = /_v\d/i.test(voice)
+  if (audioTts && !hasSuffix) {
+    log('warn', '音色 ' + voice + ' 与模型 ' + model + ' 可能不匹配：Qwen-Audio-TTS 的系统音色带 _v3.1 后缀，如 longanhuan_v3.1')
+  } else if (!audioTts && hasSuffix) {
+    log('warn', '音色 ' + voice + ' 与模型 ' + model + ' 可能不匹配：带 _v3 后缀的音色属于 Qwen-Audio-TTS')
+  }
+}
 
 /** 语音 → 文本。失败抛错，由调用方回退 [语音]。 */
 export async function transcribeAliyun(wav: Buffer, config: Config, log: Log, deps: AliyunDeps = {}): Promise<string> {
@@ -60,16 +142,22 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
     log('warn', '阿里云合成未配置 aliyunApiKey，跳过: ' + text.slice(0, 20))
     return null
   }
-  if (text.length > MAX_TTS_CHARS) {
+  // 情绪标签是拼在正文前面的，所以上限按「标签 + 正文」算。
+  const model = String(config.aliyunTtsModel ?? '').trim() || 'qwen3-tts-flash'
+  const emotionSupport = supportsEmotionTag(model)
+  const tagged = emotionSupport ? applyEmotionTag(text, config.ttsEmotion) : text
+  if (tagged.length > MAX_TTS_CHARS) {
     // shortcut: 一次只合成 600 字以内，超长不回退本机 TTS（这台机器没装），交给上层改发文字。
-    log('warn', '云端合成单次上限 ' + MAX_TTS_CHARS + ' 字符，本次 ' + text.length + ' 字，跳过')
+    log('warn', '云端合成单次上限 ' + MAX_TTS_CHARS + ' 字符，本次 ' + tagged.length + ' 字，跳过')
     return null
   }
   try {
-    const json = await postJson(TTS_PATH, key, {
-      model: String(config.aliyunTtsModel ?? '').trim() || 'qwen3-tts-flash',
-      input: { text, voice: String(config.aliyunTtsVoice ?? '').trim() || 'Cherry', language_type: 'Chinese' },
-    }, config.ttsTimeoutMs, deps)
+    const voice = String(config.aliyunTtsVoice ?? '').trim() || 'Cherry'
+    warnVoiceMismatch(model, voice, log)
+    const body = emotionSupport
+      ? audioTtsBody(model, tagged, voice, config)
+      : { model, input: { text: tagged, voice, language_type: 'Chinese' } }
+    const json = await postJson(emotionSupport ? TTS_AUDIO_PATH : TTS_PATH, key, body, config.ttsTimeoutMs, deps)
     const audio = (json as TtsResponse)?.output?.audio
     const url = String(audio?.url ?? '').trim()
     const inline = String(audio?.data ?? '').trim()
@@ -87,6 +175,14 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
     log('warn', '云端合成失败（' + (error instanceof Error ? error.message : String(error)) + '）: ' + text.slice(0, 20))
     return null
   }
+}
+
+/** Qwen-Audio-TTS 的请求体：没有 language_type，改用 format/sample_rate，可按需带 instruction。 */
+function audioTtsBody(model: string, text: string, voice: string, config: Config): unknown {
+  const input: Record<string, unknown> = { text, voice, format: 'wav', sample_rate: 24000 }
+  const instruction = String(config.aliyunTtsInstruction ?? '').trim()
+  if (instruction !== '') input.instruction = instruction
+  return { model, input }
 }
 
 interface TtsResponse {

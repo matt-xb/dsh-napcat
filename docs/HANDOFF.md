@@ -357,3 +357,29 @@
 **交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.26.tgz`（sha1 `819b0f94eb7b4e493ef4e2b036fd2f62efd91796`，133362 字节），已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（`npm install --legacy-peer-deps`），`diff -rq` 核对 `lib/`、`client/` 与仓库构建产物一致（无输出），安装后 `require('dsh-napcat/package.json').version` = `0.3.23-xb.26`，并用装好的 `lib/text.js` 直接跑 `sanitizeReply` 冒烟通过。commit `6322921`，已推 `origin/main`。
 
 **未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里复现这两类泄漏再验证修复**——真正效果要重载插件、等模型再出现同类幻觉才能确认。`MONOLOGUE_LINE` 是高置信特征黑名单，模型换种说法（比如「先确认一下」「其实这里」开头的自我推演）仍会漏；`outsideCode` 只认单反引号且不跨行（shortcut 已在代码注释标注）。
+
+## 云端语音情绪：Qwen-Audio-TTS 标签与 instruction（0.3.23-xb.27，2026-10-30）
+
+**现场**：用户切了 `voiceTtsProvider: aliyun` 后，`napcat_send_voice` 的 `emotion` 参数完全无效——哭、开心、生气发出来一个调。根因是 `ttsEmotion` 八维向量只喂给本机 TTS（`src/tts.ts` 的 `emotionVector`），云端分支 `synthesizeAliyun` 压根没读它；且默认 `qwen3-tts-flash` 本身不支持情感控制。
+
+**官方核对结论**（[非实时 TTS](https://help.aliyun.com/zh/model-studio/non-realtime-tts-user-guide) / [Qwen-Audio-TTS HTTP API](https://www.alibabacloud.com/help/zh/model-studio/qwen-audio-tts-http-api)）：
+
+- 支持情感的是 `qwen-audio-3.x-tts-plus/flash`，方式是**把情感标签写进 `text`**（如 `[sad]`、`[excited]`），不需要额外参数。
+- 端点也不同：`POST /api/v1/services/audio/tts/SpeechSynthesizer`。用旧的 multimodal 端点直接报 `url error, please check url！`。
+- 请求体也不同：`input: { text, voice, format: 'wav', sample_rate: 24000, instruction? }`，**没有 `language_type`**。
+- 音色按模型版本绑定：3.1 系带 `_v3.1`（`longanhuan_v3.1`、`longanyang_v3.1` 等），和 `qwen3-tts-flash` 的 Cherry/Nini 完全不通用（实测新模型配 Nini → `Engine error [411]`；旧模型配 `_v3.1` → `Invalid voice specified`）。
+
+**改法**：
+
+- `src/aliyun.ts`：新增 `TTS_AUDIO_PATH`（:29）、`AUDIO_TTS_RE = /^qwen-audio-\d+(?:\.\d+)?-tts-/i`（:34）、`EMOTION_TAGS`（:41-58，八维 + 8 个中文别名，calm/平静 刻意空串=不加标签）、`KNOWN_TAGS` 30 个官方标签（:61-67）与 `ANY_TAG_RE`（:68）。导出 `supportsEmotionTag`（:71）、`emotionTag`（:76）、`applyEmotionTag`（:95，文本已带官方标签就原样返回=幂等，普通方括号如 `[第二段]` 不算标签）。`synthesizeAliyun`（:139-178）：`emotionSupport` 决定是否加标签、**600 字上限按「标签+正文」算**（:149）、按模型选端点和 body；`audioTtsBody`（:181-186）生成 Audio-TTS 体，`instruction` 留空则不带该字段。`warnVoiceMismatch`（:102-110）对「Audio-TTS 模型配了无后缀音色」或「老模型配了 `_v3` 音色」打 warn，只提示不拦请求（官方错报比本地猜准）。
+- `src/config.ts`：新增 `aliyunTtsInstruction`（接口 :96、schema :200 默认 `''`、DEFAULTS :280），描述里写清只对 `qwen-audio-3.x-tts-*` 生效。**既有默认值一个没动**——`aliyunTtsModel` 仍 `qwen3-tts-flash`，`aliyunTtsVoice` 仍 `Cherry`。
+- `client/index.js`：`ALIYUN_VOICES`（:36-69）末尾追加 8 个 `［Audio-TTS］` 前缀音色；FIELDS 新增 `aliyunTtsInstruction`（:123），model/voice 两个 label 补了「要情感控制填 qwen-audio-3.1-tts-flash」「_v3.1 结尾的给 Audio-TTS 用」。
+- 本机 TTS 分支（`src/tts.ts` 的 `emotionVector` / `withGpu`）**一行没动**；表情包、记忆、会话归档相关代码未触及。
+
+**情绪映射表**：`happy/高兴 → [excited]`、`angry/生气 → [angry]`、`sad/难过 → [sad]`、`afraid/害怕 → [trembling]`、`disgusted/嫌弃 → [scornful]`、`melancholic/没劲 → [bored]`、`surprised/惊讶 → [amazed]`、`calm/平静 → 不加标签`。
+
+**验证**：`npm run typecheck` / `npm run build` 通过；`npm test` → **135 tests, 135 pass, 0 fail**（新增 `test/aliyun-emotion.test.mjs` 6 个用例，其中表驱动一组 13 行覆盖 老模型 happy/angry 不加标签、新模型 happy/高兴→`[excited]`、sad、disgusted、calm/平静/空→不加、已含 `[sad]` 与 `[Excited]` 不重复插入、普通方括号 `[第二段]` 仍加、3.0 模型也生效；另有老模型 body 深等断言、instruction 留空不传/原样透传、音色错配只 warn、标签计入 600 上限）。既有 `test/aliyun-voice.test.mjs` 的老模型断言（multimodal 端点、`{text,voice,language_type}`）全部原样通过。
+
+**交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.27.tgz`（sha1 `6f1b68fce5efb9040ba59cf8657e560dc03ed1ae`，sha256 `9b39827facc46a78f963dbafcee29695339b58bc47810d596a2c544f1eb65233`，135893 字节）。已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`（旧版备份 `backup-dsh-napcat-xb.26-20261030131500`），profile `package.json` 依赖已指向新 tgz，`npm install --legacy-peer-deps` 安装，`diff -r` 核对 `lib/`、`client/` 与新包逐字节一致（无输出），`package.json` 语义一致（npm 安装时按自己的格式重排了缩进），安装后 version = `0.3.23-xb.27`，用装好的 `lib/aliyun.js` 冒烟：`supportsEmotionTag` 对新/旧模型返回 `true/false`，`applyEmotionTag('你好','happy')='[excited]你好'`、`('你好','calm')='你好'`、`('[sad]你好','happy')='[sad]你好'`，`emotionTag('嫌弃')='[scornful]'`。
+
+**未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里用新模型发过语音**——真正听感要重载插件、把设置页 `aliyunTtsModel` 改成 `qwen-audio-3.1-tts-flash`、`aliyunTtsVoice` 改成 `longanhuan_v3.1` 之类之后才能确认。`.tmp-probe/` 是前序探查留下的未跟踪目录，本次未动也未提交。

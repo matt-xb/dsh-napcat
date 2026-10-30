@@ -58,6 +58,15 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         ['Roy', '闽南-阿杰 · 男 · 闽南语'], ['Peter', '天津-李彼得 · 男 · 相声'],
         ['Sunny', '四川-晴儿 · 女 · 川话'], ['Eric', '四川-程川 · 男 · 川话'],
         ['Rocky', '粤语-阿强 · 男 · 粤语'], ['Kiki', '粤语-阿清 · 女 · 粤语'],
+        // 以下属于 Qwen-Audio-TTS（模型填 qwen-audio-3.1-tts-flash 之类才可用），和上面的音色不通用
+        ['longanhuan_v3.1', '［Audio-TTS］龙安欢 · 女 · 活泼'],
+        ['longanlingxin_v3.1', '［Audio-TTS］龙安灵心 · 女 · 温柔'],
+        ['longanfengyue_v3.1', '［Audio-TTS］龙安风悦 · 女 · 自然'],
+        ['xunanchuan_v3.1', '［Audio-TTS］许南川 · 男 · 磁性'],
+        ['longanyang_v3.1', '［Audio-TTS］龙安洋 · 男 · 阳光'],
+        ['longxiaobai_v3.1', '［Audio-TTS］龙小白 · 女 · 磁性'],
+        ['longshu_v3.1', '［Audio-TTS］龙书 · 男 · 沉稳'],
+        ['longlaotie_v3.1', '［Audio-TTS］龙老铁 · 男 · 东北话'],
       ]
 
       /**
@@ -109,8 +118,9 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'voiceTtsProvider', label: '语音合成后端', kind: 'select', options: [['local', 'local：本机 IndexTTS'], ['aliyun', 'aliyun：阿里云百炼（云端，按字符计费）']] },
         { key: 'aliyunApiKey', label: '阿里云百炼 API Key（只填本机，别提交仓库）', kind: 'password', placeholder: 'sk-…' },
         { key: 'aliyunAsrModel', label: '云端识别模型（默认 qwen3-asr-flash）', kind: 'text', placeholder: 'qwen3-asr-flash' },
-        { key: 'aliyunTtsModel', label: '云端合成模型（默认 qwen3-tts-flash）', kind: 'text', placeholder: 'qwen3-tts-flash' },
-        { key: 'aliyunTtsVoice', label: '云端音色（只对 aliyun 后端有效）', kind: 'select', options: ALIYUN_VOICES },
+        { key: 'aliyunTtsModel', label: '云端合成模型（默认 qwen3-tts-flash；要情感控制填 qwen-audio-3.1-tts-flash）', kind: 'text', placeholder: 'qwen3-tts-flash' },
+        { key: 'aliyunTtsVoice', label: '云端音色（只对 aliyun 后端有效；_v3.1 结尾的给 Audio-TTS 用）', kind: 'select', options: ALIYUN_VOICES },
+        { key: 'aliyunTtsInstruction', label: '云端合成指令（方言/语速/语气，如「请用轻快一点的语气说」；仅 Audio-TTS 生效，留空不加）', kind: 'text' },
         { key: 'ttsEnabled', label: '发语音：开启（本机 TTS 合成后发语音消息）', kind: 'boolean' },
         { key: 'ttsServerUrl', label: 'TTS 服务地址（默认 http://127.0.0.1:9880）', kind: 'text' },
         { key: 'ttsVoiceRef', label: '音色参考音频路径', kind: 'text' },

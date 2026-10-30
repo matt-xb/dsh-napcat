@@ -89,6 +89,8 @@ export interface Config {
     aliyunAsrModel: string;
     aliyunTtsModel: string;
     aliyunTtsVoice: string;
+    /** 云端自然语言指令（方言/语速/语气），仅 Qwen-Audio-TTS 系列生效。 */
+    aliyunTtsInstruction: string;
     ttsEnabled: boolean;
     ttsServerUrl: string;
     /** 音色预设：名字 → 参考音频绝对路径。 */
