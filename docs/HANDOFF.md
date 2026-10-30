@@ -75,7 +75,7 @@
   - `src/text.ts` `stripToolSyntax` 重写：逐行扫，``` 围栏内原样保留；整行只有标签/HTML 注释、整行是本地媒体绝对路径的直接丢；非代码段再剥 `![](本地绝对路径)` 与包装标签（`WRAPPER_TAGS` 白名单，未列出的普通标签如 `<b>` 原样留着）；保留原有 DSML/antml/invoke/parameter 行过滤与换行折叠。
   - `src/bridge.ts:46-47` 新增 `IMAGE_REPLY_RULES` 并在 `personaText`（`:1217`）拼进所有 QQ 会话。
 - 验证：`npm run build` 通过；`npm test` → **105 tests, 105 pass, 0 fail**。新增用例：`test/bridge-integration.test.mjs`「watchdog covers brand-new chats and is disarmed by turn/start」（dispatch 后 `startTimer` 存在 → turn/start 后为 undefined 且 `turnStarted === true`）；`test/migration-text-memory.test.mjs`「wrapper tags and local media paths never reach QQ as text」（`</output>` 尾行、`<output>好了</output>`→`好了`、注释行、`![](D:\…)`、独占一行本地路径都会被剥；`[已发送图片：…]` 保留；围栏/反引号内不动；`a < b 且 c > d` 不误伤）。
-- 未改：`droppedText` 仍然只留 warn 不代发（既有测试 `dropped tool-step narration warns once and is never auto-sent` 与 `multiple tool steps and tool-only completion do not become user-facing replies` 明确要求，不能靠补发工具步叙述解决吞回复）。
+- 未改：`droppedText` 仍然只留 warn 不代发（既有测试 `dropped tool-step narration warns once and is never auto-sent` 与 `multiple tool steps and tool-only completion do not become user-facing replies` 明确要求，不能靠补发工具步叙述解决吞回复）。**（已被 0.3.23-xb.30 推翻：那两条测试断言的正是要修的行为，现改为轮末补发，见文末小节。）**
 - 已知局限：看门狗仍以 10s 为界，模型侧极慢排队（10s 内既无 turn/start 也无任何事件）在排队消息场景不会误触发，但若宿主真的接了消息又不发任何事件，只能靠一次重投后给用户提示；`turnStarted` 现在才真正被置 true，历史代码里的 `fresh` 字段仅用于这一处判断，已不再影响上盾。
 - 交付：见下方部署小节。
 
@@ -410,3 +410,45 @@
 **交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.28.tgz`（sha1 `c188d02e059c8d696fab55117a853ded4f9ca219`，sha256 `eb7f18803c6c12481c1243ced29f1fa9e317e212efb31d16a6b0d9d6ac8e6749`，137541 字节，52 个文件）。已装到 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat`，profile `package.json` 第 10 行指向新 tgz，`npm install --legacy-peer-deps`，`diff -r` 核对 `lib/`、`client/` 与源码无差异，安装后 version = `0.3.23-xb.28`，用装好的 `lib/wav.js` 冒烟 `normalizeWav` 对占位头返回 `fixed=true riff=1956 data=1920`（期望 1920）。commit `910c8d0`，`origin/main...HEAD` = `0 0`。
 
 **未验证 / 需注意**：**没有重启 DSH，也没有在真实 QQ 里听过新包发出去的语音**——听感是否恢复需要重载插件后实听。尾音截断本身在采样层不可复现，本次修的是可证的坏头与空壳放行；若重载后仍能听到截断，下一步要抓 QQ 侧收到的 ptt 原件（本机 `AppData/Roaming/Tencent/QQ` 下没有可读的语音文件，NapCat 日志目录也没开）。
+
+## 修复：工具步骤里的正文在轮末没发出去（群聊"说了但没推送"）（0.3.23-xb.30，2026-10-30）
+
+**用户反馈**：群里机器人"其实也都有回复了，但不知道为什么不推送"——DSH 里能看到它写了回复，QQ 群里没收到。
+
+**根因**：`src/bridge.ts` 的 `assistant/message` 分支按「这一步有没有 tool-call」把正文字分流：无 tool-call → `chat.buffer = [text]`（轮末发）；有 tool-call → 只写 `chat.droppedText`（轮末不发）。轮末 `text` 的取算是 `chat.outputBlocked || chat.toolTextComplete ? '' : buffer 去掉 toolTexts 后 join`，只要本轮模型调过任何会置 `toolTextComplete` 的工具（`trackTextSend(..., true)` 的 `napcat_send_message` / `napcat_api`，或 `markOutputSent` 的图片/文件/语音/唱歌），`text` 就整段清空；而如果模型只是拿正文当前置叙述、工具本身没发文字（搜表情包、发语音、查后台任务、`compress` 等），那段正文就一个字节都没出去。轮末的 `else if (!chat.toolTextComplete)` 分支当时只 `log('warn', '正文未发出（只在工具步骤里出现，轮末为空）')`，注释明写"只留痕，绝不代发"——于是群里表现为"回了但没推送"。日志里能搜到该 warn 文案。
+
+**`droppedText` 到底存什么**：模型正文原文，**不是**工具入参。赋值点只在 `src/bridge.ts:1450-1452`（带 tool-call 那一步的 `text.trim()`），工具发送的文字只进 `chat.toolTexts`（`src/bridge.ts:787`），两条通路互不写对方的字段。每个 assistant 步骤都会覆盖 `chat.droppedText`，所以它天然是"最新一步的叙述"，不会把多步叙述堆成一条。
+
+**改动**（3 个文件 + 版本号）：
+- `src/bridge.ts:76` 字段注释改为「只出现在工具步骤里的模型正文（轮末 buffer 为空时补发用）」；`:1449` 内联注释同步（原「留一条告警」→「用它补发」）。
+- `src/bridge.ts:1519-1526`（turn/end 的 `else if (!chat.toolTextComplete)` 分支）：由只 warn 改为「warn 留痕 + 真正发送」——
+  ```ts
+  } else if (!chat.toolTextComplete) {
+    // 模型写了正文却一个字没发出去（正文都在工具步骤里，轮末 buffer 为空）：补发这段正文。
+    // droppedText 是模型正文原文而非工具入参；工具真发过的部分在 toolTexts 里，sendText 会按行剔掉。
+    const dropped = chat.droppedText
+    if (dropped !== undefined) {
+      this.opts.log('warn', '轮末无已发正文，补发工具步骤里的正文: ' + key + ' turn=' + chat.outputTurn + ' 文本="' + dropped.slice(0, 100) + '"')
+      void this.sendText(chat, compactShortReply(dropped))
+    }
+  }
+  ```
+  `dropped === undefined`（本轮根本没写过带 tool-call 的正文）仍然什么都不发，保持原有静默。走的是和正常回复同一条 `sendText`（`:1567`），因此 `sanitizeReply` 的拦截、禁言跳过、`splitText` 分段、失败重试、记忆写入全部复用，没新开旁路。
+- `src/bridge.ts` 的 `sanitizeReply`（`src/text.ts:323-333`）一行没动；私聊与群聊共用这条路径，没有单独的私聊改动。
+- `package.json:3` → `0.3.23-xb.30`。
+
+**重复发送怎么被防住**：`sendText` 在 `:1581-1582` 已经用 `splitText(...).filter(chunk => !chat.toolTexts?.has(replyDedupKey(chunk)))` 按行剔除本轮工具真发过的内容，`replyDedupKey`（`src/text.ts:397-400`）把 ≤120 字的纯中文去空白和标点后比较，所以"工具发了 A、模型又在叙述里写了 A"只会发一次。反过来，工具只发了一部分（长文分段中途失败，或工具根本没发文字）时，没发出去的那部分不在 `toolTexts` 里，会被补发——这正是要救的场景。工具侧的 `claimSendOnce` / `sentKeys` 保护的是"模型自己重复调工具"，与这条补发路径不冲突。
+
+**关于旧结论**：本节推翻了 xb.13 小节 `:78` 那条「`droppedText` 仍然只留 warn 不代发」——当时被两条测试（`dropped tool-step narration warns once and is never auto-sent`、`multiple tool steps and tool-only completion do not become user-facing replies`）钉住了，而它们断言的正是本次要改的行为，故一并改写（见下）。xb.13 当时真正修的是"归档后吞回复"的会话层问题，和这条是两回事。
+
+**测试**：`test/bridge-integration.test.mjs` 改 3 组、增 1 组：
+- `tool-step narration that no tool delivered is sent at turn end`（private/group 表驱动，原 `... warns once and is never auto-sent`）：断言 `sent.length === 1`、正文即工具步骤里那段、记忆写入 1 条、`补发工具步骤里的正文` warn 恰好 1 条。
+- `tool-only completion still sends the narration, and a final answer still wins alone`（原 `multiple tool steps and tool-only completion do not become user-facing replies`）：三步都只有叙述 + tool-call 时轮末只发 1 条且是**最新**那步的叙述（验证"只发最新候选"）；第二轮 error 仍只发 `⚠️ 本轮回复失败，请稍后再试`。
+- 新增 `turn-end resend never repeats text a tool already delivered in the same turn`：表驱动 `none`（工具已成功发过同段文字）/ `partial`（长文分段中途失败，`toolTextComplete === false`）两种，断言都是 `sent.length === 1`，即补发不会和工具已送达的内容重复。
+- `silent sentinel and error turns never resend anything extra`（原 `... never raise the dropped-text warning`）：`[[NAPCAT_SILENT]]` 轮、error 轮、正常轮分别 0/1/2 条发送，补发日志 0 条。
+
+`npm run typecheck` / `npm run build` 通过；`npm test` → **146 tests, 146 pass, 0 fail, 0 skipped**（基线 143）。
+
+**交付**：`E:/NapCat/releases/dsh-napcat-0.3.23-xb.30.tgz`（sha1 `d9a5cda52b5934509ed3effed744455ca1ae810a`，sha256 `b68a2cdc25b2983c782dc3531d4b386fdb253bc6c23c21a25260d8897dae0024`，137760 字节，52 个文件）。解包后 `diff -r lib <tgz>/package/lib` 无差异（LIB_MATCH），`package/lib/bridge.js:1517-1526` 即新补发分支。
+
+**未做 / 需注意**：**只做了本地构建**——没有 `npm publish`，没有改 `C:\Users\Administrator\.dsh\profiles\desktop\node_modules\dsh-napcat` 里已装的版本，没有动 `cordis.patch.yml`（另一个任务可能在改它）。所以**要让修复生效必须重装/重载插件并重启 DSH**，本次未重启也未在真实 QQ 里验证"群里那句话现在能推出去"。补发是"轮末兜底"，同一个 turn 里工具后续若又发了内容，靠 `toolTexts` 去重，不会重复。

@@ -240,18 +240,24 @@ for (const kind of ['private', 'group']) {
   })
 }
 
-test('multiple tool steps and tool-only completion do not become user-facing replies', async () => {
-  const f = fixture(); f.start(1); f.message('older draft before continuing')
-  for (const [step, name] of [[1, 'compress'], [2, 'web_search']]) f.emit('assistant/message', {
+test('tool-only completion still sends the narration, and a final answer still wins alone', async () => {
+  const f = fixture(); f.start(1)
+  f.message('', 1, { content: [
+    { type: 'text', text: 'older draft before continuing' },
+    { type: 'tool-call', id: 'synthetic-draft', name: 'compress', arguments: '{}' },
+  ] })
+  for (const [step, name] of [[2, 'compress'], [3, 'web_search']]) f.emit('assistant/message', {
     turn: 1, step, message: { role: 'assistant', source: { kind: 'model' }, content: [
       { type: 'text', text: 'intermediate narration ' + step }, { type: 'tool-call', id: 'synthetic-' + step, name, arguments: '{}' },
     ] },
   })
-  f.end(1); await tick(); assert.equal(f.sent.length, 0); assert.equal(f.memory.length, 0)
+  f.end(1); await tick()
+  // 最新一步的正文才是候选：不能把每一步的叙述都堆出去
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].params.message[0].data.text, 'intermediate narration 3')
   f.start(2)
   f.message('已经完成', 2, { content: [{ type: 'text', text: '已经完成' }, { type: 'tool-call', id: 'synthetic-error', name: 'compress', arguments: '{}' }] })
   f.emit('turn/end', { turn: 2, reason: { kind: 'error', error: { message: 'private diagnostic' } } }); await tick()
-  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].params.message[0].data.text, '⚠️ 本轮回复失败，请稍后再试')
+  assert.equal(f.sent.length, 2); assert.equal(f.sent[1].params.message[0].data.text, '⚠️ 本轮回复失败，请稍后再试')
 })
 
 test('tool-step filtering does not change successful explicit text delivery ownership', async () => {
@@ -263,7 +269,7 @@ test('tool-step filtering does not change successful explicit text delivery owne
 })
 
 for (const kind of ['private', 'group']) {
-  test(kind + ': dropped tool-step narration warns once and is never auto-sent', async () => {
+  test(kind + ': tool-step narration that no tool delivered is sent at turn end', async () => {
     const f = fixture(kind), logs = []; f.start(1)
     f.b.opts.log = (level, message) => logs.push({ level, message })
     f.message('', 1, { content: [
@@ -271,23 +277,46 @@ for (const kind of ['private', 'group']) {
       { type: 'tool-call', id: 'synthetic-dropped', name: 'compress', arguments: '{}' },
     ] })
     f.end(1); f.end(1); await tick()
-    assert.equal(f.sent.length, 0); assert.equal(f.memory.length, 0)
-    const warnings = logs.filter(entry => entry.level === 'warn' && entry.message.includes('正文未发出'))
+    assert.equal(f.sent.length, 1)
+    assert.equal(f.sent[0].params.message[0].data.text, '还在跑 那个更新面板交给后台了')
+    assert.equal(f.memory.length, 1); assert.equal(f.memory[0][1].text, f.sent[0].params.message[0].data.text)
+    const warnings = logs.filter(entry => entry.level === 'warn' && entry.message.includes('补发工具步骤里的正文'))
     assert.equal(warnings.length, 1)
     assert.ok(warnings[0].message.includes(f.key) && warnings[0].message.includes('turn=1'))
-    assert.ok(warnings[0].message.includes('还在跑 那个更新面板交给后台了'))
   })
 }
 
-test('silent sentinel and error turns never raise the dropped-text warning', async () => {
+test('turn-end resend never repeats text a tool already delivered in the same turn', async () => {
+  for (const failure of ['none', 'partial']) {
+    const f = fixture(); f.start(1)
+    if (failure === 'partial') {
+      const original = f.conn.call; let calls = 0
+      f.conn.call = (...args) => { if (++calls === 2) throw Error('definite rejection'); return original(...args) }
+      await assert.rejects(f.tools.get('napcat_send_message').execute({ chat_id: f.key, text: '甲'.repeat(1300) + '乙' }, f.exec))
+      assert.equal(f.chat.toolTextComplete, false)
+    } else {
+      await f.tools.get('napcat_send_message').execute({ chat_id: f.key, text: '已经发出的那段' }, f.exec)
+    }
+    const delivered = f.sent[0].params.message[0].data.text
+    // 模型把工具已送达的文字当正文再写一遍：轮末补发必须按行剔掉，不能重复
+    f.message('', 1, { content: [
+      { type: 'text', text: delivered },
+      { type: 'tool-call', id: 'synthetic-echo', name: 'compress', arguments: '{}' },
+    ] })
+    f.end(1); await tick()
+    assert.equal(f.sent.length, 1)
+  }
+})
+
+test('silent sentinel and error turns never resend anything extra', async () => {
   const f = fixture(), logs = []; f.b.opts.log = (level, message) => logs.push({ level, message })
-  const dropped = () => logs.filter(entry => entry.message.includes('正文未发出')).length
+  const resent = () => logs.filter(entry => entry.message.includes('补发工具步骤里的正文')).length
   f.start(1); f.message('[[NAPCAT_SILENT]]'); f.end(1); await tick()
-  assert.equal(f.sent.length, 0); assert.equal(dropped(), 0)
+  assert.equal(f.sent.length, 0); assert.equal(resent(), 0)
   f.start(2); f.emit('turn/end', { turn: 2, reason: { kind: 'error', error: { message: 'private diagnostic' } } }); await tick()
-  assert.equal(f.sent.length, 1); assert.equal(dropped(), 0)
+  assert.equal(f.sent.length, 1); assert.equal(resent(), 0)
   f.start(3); f.message('这轮是正常回复', 3); f.end(3); await tick()
-  assert.equal(f.sent.length, 2); assert.equal(dropped(), 0)
+  assert.equal(f.sent.length, 2); assert.equal(resent(), 0)
 })
 
 test('only the latest committed candidate is sent, without fuzzy text comparisons', async () => {

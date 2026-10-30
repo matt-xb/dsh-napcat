@@ -73,7 +73,7 @@ interface ChatState {
   toolTextComplete?: boolean
   /** 本轮已成功发出去的内容；模型在同轮重复调同一个发送工具时挡掉第二次。 */
   sentKeys?: Set<string>
-  /** 只出现在工具步骤里、轮末被丢掉的模型正文（漏发告警用）。 */
+  /** 只出现在工具步骤里的模型正文（轮末 buffer 为空时补发用）。 */
   droppedText?: string
   /** Snapshots are queued with followups, never replaced by a later inbound image. */
   pendingTaskInputs?: Map<string, ContentBlock[]>
@@ -1448,7 +1448,7 @@ export class Bridge {
         // Tool-step text is narration, not another final answer (e.g. before history compression).
         chat.buffer = [text.trim()]
       } else if (text.trim() !== '') {
-        // 带 tool-call 的正文不参与发送，但要留着：轮末一字未发时用它留一条告警
+        // 带 tool-call 的正文不参与发送，但要留着：轮末一字未发时用它补发
         chat.droppedText = text.trim()
       }
       return
@@ -1508,10 +1508,13 @@ export class Bridge {
             else void this.recoverChat(chat, reason.error, false)
           }
       } else if (!chat.toolTextComplete) {
-        // 模型写了正文却一个字没发出去（叙述都在工具步骤里被丢了）：只留痕，绝不代发
+        // 模型写了正文却一个字没发出去（正文都在工具步骤里，轮末 buffer 为空）：补发这段正文。
+        // droppedText 是模型正文原文而非工具入参；工具真发过的部分在 toolTexts 里，sendText 会按行剔掉。
         const dropped = chat.droppedText
-        if (dropped !== undefined)
-          this.opts.log('warn', '正文未发出（只在工具步骤里出现，轮末为空）: ' + key + ' turn=' + chat.outputTurn + ' 文本="' + dropped.slice(0, 100) + '"')
+        if (dropped !== undefined) {
+          this.opts.log('warn', '轮末无已发正文，补发工具步骤里的正文: ' + key + ' turn=' + chat.outputTurn + ' 文本="' + dropped.slice(0, 100) + '"')
+          void this.sendText(chat, compactShortReply(dropped))
+        }
       }
       return
     }
