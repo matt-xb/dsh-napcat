@@ -28,6 +28,15 @@ export declare function shortHash(text: string): string;
  * 支持 `#` 注释与空行。返回 key → 文本（key 形如 `group:123`）。
  */
 export declare function parsePersonaOverrides(raw: string): Map<string, string>;
+/** 正文里出现内部上下文标记：整条都不能发（半截裁剪会留下残句，比不发更糟）。 */
+export declare function looksLikeInternalContext(text: string): boolean;
+/**
+ * 出口硬拦：待发正文和「本轮注入给模型的原文」重合太多，就是复述，整条丢弃。
+ * 注入原文由 bridge 记录（宿主 runtime-context 的 snapshot sections + 插件规则段 + 入站上下文块）；
+ * 拿不到原文时（例如工具直接发别的聊天）仍有 `looksLikeInternalContext` 这层关键词兜底。
+ * 判据用足够长的连续片段，正常聊天里复述用户自己的话不会命中。
+ */
+export declare function replaysInjected(text: string, injected: readonly string[]): boolean;
 /** Internal context must never be forwarded to QQ. */
 export declare function sanitizeReply(text: string): string | null;
 /** Compact short Chinese prose only; preserve structured and long-form output. */

@@ -129,6 +129,12 @@ export declare class Bridge {
             };
         };
     } | undefined): string;
+    /**
+     * 记下本会话注入给模型的原文副本（出口 replaysInjected 比对用）。
+     * 规则段和入站上下文块都是插件自己拼的，宿主的 snapshot sections 里拿不到，
+     * 所以只能在这里留一份；同一段重复注入不重复存。
+     */
+    private rememberInjected;
     private personaForChat;
     private attachToWorkspace;
     /** 会话工作目录：开了 perChatWorkspace 时每个 QQ 会话一个子目录（侧边栏按工作区归拢）。 */

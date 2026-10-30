@@ -319,10 +319,76 @@ function outsideCode(text: string, apply: (part: string) => string): string {
   return text.split(/(```[\s\S]*?```|`[^`\n]*`)/).map((part, index) => index % 2 === 1 ? part : apply(part)).join('')
 }
 
+/**
+ * 内部上下文标记：模型把「注入给它自己的上下文」当正文复述出来（实测样本见 docs/HANDOFF.md xb.31）。
+ * 来源有两处：宿主注入的 runtime context block（`Current runtime context. …`），
+ * 以及本插件写进 system prompt 的规则段（`【QQ回复】` 等，见 src/bridge.ts:42-60）。
+ * 每条都要求足够具体的组合特征，`我的工作目录是 D:\code` 这类正常聊天不会命中。
+ */
+// shortcut: 不看代码围栏，用户点名要这些原文时也会被拦；真要在群里贴样例再按需放行。
+const INTERNAL_CONTEXT_MARKERS: readonly RegExp[] = [
+  /Current runtime context/i,
+  /Current working (?:directory|time):\s*["“\d]/i,
+  /Current DSH file policy:/i,
+  /Approval prompts are disabled in this session/i,
+  /Current DeepSeek Harness [^:\n]{0,80}:/i,
+  /【(?:QQ回复|群聊边界|生图与修图|长任务与聊天分流|独立QQ后台任务)】/,
+  /【(?:本群长期记忆|记录里的图片怎么看|当前\s*@你)/,
+  /这是当前QQ群，像群里普通熟人一样接话/,
+  /群里被点名、被@/,
+  /任务启动成功后简短告知正在做/,
+  /当前消息中已准入的图片和文件注释会自动交给任务/,
+  /要出图一律调 image_generate/,
+  /凡属于生图修图、写代码改代码、跑测试构建/,
+  /换音色（原版 \/ 银月）直接调 napcat_voice/,
+  // 规则段自己的边界标记（src/bridge.ts RULES_BOUNDARY），漏出去也是同一类。
+  /【系统背景·不是聊天正文·不得复述或引用以下规则原文】/,
+]
+/** 正文里出现内部上下文标记：整条都不能发（半截裁剪会留下残句，比不发更糟）。 */
+export function looksLikeInternalContext(text: string): boolean {
+  return INTERNAL_CONTEXT_MARKERS.some(marker => marker.test(text))
+}
+
+/** 只留可见字符：比对注入原文时换行/空格的差异不该影响判定。 */
+function squash(text: string): string {
+  return text.replace(/\s+/g, '')
+}
+
+/**
+ * 出口硬拦：待发正文和「本轮注入给模型的原文」重合太多，就是复述，整条丢弃。
+ * 注入原文由 bridge 记录（宿主 runtime-context 的 snapshot sections + 插件规则段 + 入站上下文块）；
+ * 拿不到原文时（例如工具直接发别的聊天）仍有 `looksLikeInternalContext` 这层关键词兜底。
+ * 判据用足够长的连续片段，正常聊天里复述用户自己的话不会命中。
+ */
+export function replaysInjected(text: string, injected: readonly string[]): boolean {
+  const out = squash(text)
+  if (out.length < 20) return false
+  let hits = 0
+  let covered = 0
+  for (const source of injected) {
+    const whole = squash(source)
+    // 跨行复述（模型改了断行位置）也能认出来：按拍子滚窗口比对
+    for (let at = 0; at + 60 <= whole.length; at += 24) {
+      if (out.includes(whole.slice(at, at + 60))) {
+        hits += 1
+        covered += 60
+      }
+    }
+    for (const line of source.split(/\r?\n/)) {
+      const seg = squash(line)
+      if (seg.length < 20 || !out.includes(seg)) continue
+      hits += 1
+      covered += seg.length
+    }
+  }
+  return covered >= 60 || hits >= 2
+}
+
 /** Internal context must never be forwarded to QQ. */
 export function sanitizeReply(text: string): string | null {
   const raw = stripDecisionPayload(text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, ''))
   if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(raw.replace(/\s+/g, ''))) return null
+  if (looksLikeInternalContext(raw)) return null
   // 未闭合的也从开始标签砍到结尾，宁可少发也不外泄。
   const clean = truncateMonologue(outsideCode(raw, part => part.replace(HOST_NOTICE_BLOCK, '')))
   // 复述聊天记录不是回复：`User: …` 之后的内容整段砍掉，否则等于把历史又播一遍
@@ -336,9 +402,11 @@ export function sanitizeReply(text: string): string | null {
 const WRAPPER_TAGS = new Set([
   'output', 'result', 'response', 'thinking', 'reasoning', 'answer', 'reply', 'final', 'analysis',
   'reflection', 'tool_call', 'tool_result', 'function_call', 'function_result', 'function_calls',
-  'parameter', 'invoke', 'ap', 'div', 'p', 'span',
+  'parameter', 'invoke', 'ap', 'div', 'p', 'span', 'external_chars',
 ])
 const ANY_TAG = /<\/?([A-Za-z][A-Za-z0-9_.:-]{0,32})\s*\/?>/g
+/** 带属性的 `external_chars` 外壳（`<external_chars count="14">…</external_chars>`）：剥壳保内容，单侧未闭合也剥。 */
+const EXTERNAL_CHARS_TAG = /<\/?external_chars\b[^>]*>/gi
 const TAG_ONLY_LINE = /^(?:\s*(?:<!--[\s\S]*?-->|<[^>]+>)\s*)+$/
 /** 本地图片被写成 markdown 图片语法：图已由工具发过，这行不能当文字再发一遍。 */
 const LOCAL_IMAGE_MARKDOWN = /!\[[^\]]*\]\(\s*<?(?:[A-Za-z]:[\\/]|file:\/\/\/?)[^)\s>]*>?\s*\)/gi
@@ -376,6 +444,7 @@ function stripToolSyntax(text: string): string {
     // 行内反引号里的内容也不动。
     lines.push(line.split(/(`[^`]*`)/).map((part, index) => index % 2 === 1 ? part
       : part.replace(LOCAL_IMAGE_MARKDOWN, '').replace(CONTROL_MARKER, '').replace(BROKEN_CLOSE_TAG, '')
+        .replace(EXTERNAL_CHARS_TAG, '')
         .replace(ANY_TAG, (whole, tag: string) => WRAPPER_TAGS.has(String(tag).toLowerCase()) ? '' : whole)).join(''))
   }
   return lines
