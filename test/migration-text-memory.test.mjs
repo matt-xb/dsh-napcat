@@ -65,6 +65,22 @@ test('wrapper tags and local media paths never reach QQ as text', () => {
   assert.equal(sanitizeReply('a < b 且 c > d'), 'a < b 且 c > d')
 })
 
+test('replayed chat history is cut before it can be sent back', () => {
+  // 模型复述会话内部记录：正文里接着冒出 `User:` / `助手:` 对话行 —— 那是历史，不是回复。
+  assert.equal(sanitizeReply('刚才那条成功了，说明进程还没吃新配置\n\nUser: 什么'), '刚才那条成功了，说明进程还没吃新配置')
+  assert.equal(sanitizeReply('截个图\nUser: [图片]'), '截个图')
+  assert.equal(sanitizeReply('一\nUser: a\nUser: b'), '一')
+  assert.equal(sanitizeReply('  User: 缩进也算'), '')
+  assert.equal(sanitizeReply('助手: 我改完了'), '')
+  assert.equal(sanitizeReply('user 你不是说修了吗？\nassistant\n修了'), 'user 你不是说修了吗？')
+  // 正文里正常提到角色名不算复述。
+  assert.equal(sanitizeReply('User 这个字段是宿主的'), 'User 这个字段是宿主的')
+  assert.equal(sanitizeReply('我问了 assistant 的接口'), '我问了 assistant 的接口')
+  assert.equal(sanitizeReply('第一行\n第二行'), '第一行\n第二行')
+  // 全被砍空时由外发校验兜底，不会发空消息。
+  assert.throws(() => sanitizeOutgoingMessage('User: 在吗'), /空消息/)
+})
+
 test('recent image memory preserves concurrent deliveries and isolates chat/role', async () => {
   const root = await mkdtemp(join(tmpdir(), 'napcat-memory-'))
   try {
