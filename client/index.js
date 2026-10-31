@@ -118,7 +118,7 @@ if (moduleLoader !== undefined && moduleLoader !== null) {
         { key: 'voiceTtsProvider', label: '语音合成后端', kind: 'select', options: [['local', 'local：本机 IndexTTS'], ['aliyun', 'aliyun：阿里云百炼（云端，按字符计费）']] },
         { key: 'aliyunApiKey', label: '阿里云百炼 API Key（只填本机，别提交仓库）', kind: 'password', placeholder: 'sk-…' },
         { key: 'aliyunAsrModel', label: '云端识别模型（默认 qwen3-asr-flash）', kind: 'text', placeholder: 'qwen3-asr-flash' },
-        { key: 'aliyunTtsModel', label: '云端合成模型（默认 qwen3-tts-flash；要情感控制填 qwen-audio-3.1-tts-flash）', kind: 'text', placeholder: 'qwen3-tts-flash' },
+        { key: 'aliyunTtsModel', label: '云端合成模型（音色为空时的兜底；平时由音色自动决定，不用填）', kind: 'text', placeholder: 'qwen3-tts-flash' },
         { key: 'aliyunTtsVoice', label: '云端音色（只对 aliyun 后端有效；_v3.1 结尾的给 Audio-TTS 用）', kind: 'select', options: ALIYUN_VOICES },
         { key: 'aliyunTtsInstruction', label: '云端合成指令（方言/语速/语气，如「请用轻快一点的语气说」；仅 Audio-TTS 生效，留空不加）', kind: 'text' },
         { key: 'ttsEnabled', label: '发语音：开启（本机 TTS 合成后发语音消息）', kind: 'boolean' },

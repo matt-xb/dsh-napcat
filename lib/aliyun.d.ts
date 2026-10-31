@@ -1,5 +1,6 @@
 /**
- * 阿里云百炼（DashScope）云端语音：识别用 qwen3-asr-flash，合成用 qwen3-tts-flash。
+ * 阿里云百炼（DashScope）云端语音：识别用 qwen3-asr-flash；合成模型由音色决定
+ * （带 _v3.1 后缀的音色属于 Audio-TTS，其余属于 qwen3-tts-flash）。
  *
  * 不引 SDK：两条都是普通 HTTPS POST，用原生 fetch。云端只做「听」和「嘴」的替代实现，
  * 上层（bridge 的 [语音] 回退、napcat_send_voice 的失败回退文字）完全不用改。

@@ -410,7 +410,11 @@ export function registerTools(
         : config
       const wav = await synthesizeToWav(text, settings, log, {}, target.kind + ':' + target.id)
       if (wav === null) {
-        throw new Error('语音合成失败：TTS 服务不可用或超时（' + String(config.ttsServerUrl) + '），改用文字发送')
+        // 真实原因已经由 aliyun.ts / tts.ts 写进日志（HTTP 状态、云端 code/message、model 与 voice）；
+        // 这里别再一律说「超时」，会把人往错的方向引。
+        throw new Error(String(config.voiceTtsProvider ?? 'local') === 'aliyun'
+          ? '语音合成失败：阿里云合成没成功，具体 code/message 见插件日志（已记录 model 与 voice），改用文字发送'
+          : '语音合成失败：TTS 服务不可用或超时（' + String(config.ttsServerUrl) + '），改用文字发送')
       }
       const release = claimOnce(exec, target.kind + ':' + target.id, 'voice|' + text + '|' + (input.emotion ?? ''))
       const file = 'file:///' + wav.replace(/\\/g, '/')

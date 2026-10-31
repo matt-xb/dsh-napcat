@@ -108,6 +108,53 @@ test('synthesizeAliyun 云端报错返回 null（不抛），让上层回退文�
   assert.ok(logs.some(item => item.level === 'warn' && item.message.includes('Throttling')))
 })
 
+test('云端报错的日志带上 model/voice，能看出是哪套音色撞了', async () => {
+  logs.length = 0
+  const fetch = async () => ({
+    ok: false,
+    status: 400,
+    text: async () => JSON.stringify({ code: 'Engine error [411]', message: 'TTS speak operation failed' }),
+  })
+  const config = { ...baseConfig, aliyunTtsVoice: 'Nini' }
+  assert.equal(await synthesizeAliyun('你好', config, log, { fetch }), null)
+  const line = logs.find(item => item.level === 'warn' && item.message.includes('Engine error [411]'))
+  assert.ok(line !== undefined, '日志要保留云端 code/message')
+  assert.ok(line.message.includes('model=qwen3-tts-flash'), line.message)
+  assert.ok(line.message.includes('voice=Nini'), line.message)
+})
+
+test('音色决定模型：不带后缀 → qwen3-tts-flash，带 _v3.1 → qwen-audio-3.1-tts-flash', async () => {
+  const cases = [
+    { voice: 'Nini', model: 'qwen3-tts-flash', path: '/api/v1/services/aigc/multimodal-generation/generation' },
+    { voice: 'longanhuan_v3.1', model: 'qwen-audio-3.1-tts-flash', path: '/api/v1/services/audio/tts/SpeechSynthesizer' },
+  ]
+  for (const item of cases) {
+    const { calls, fetch } = recordCalls(async url => {
+      if (String(url).startsWith('https://oss.example.com/')) {
+        return { ok: true, status: 200, arrayBuffer: async () => makeWav() }
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ output: { audio: { url: 'https://oss.example.com/a.wav', data: '' } } }),
+      }
+    })
+    // 配置里的 model 故意写反，验证它不再影响实际请求。
+    const wrong = item.model === 'qwen3-tts-flash' ? 'qwen-audio-3.1-tts-flash' : 'qwen3-tts-flash'
+    const wav = await synthesizeAliyun('你好', { ...baseConfig, aliyunTtsModel: wrong, aliyunTtsVoice: item.voice }, log, { fetch })
+    try {
+      assert.ok(wav !== null, item.voice + '：应当合成成功')
+      assert.ok(calls[0].url.endsWith(item.path), item.voice + '：端点不对 ' + calls[0].url)
+      const body = JSON.parse(calls[0].init.body)
+      assert.equal(body.model, item.model, item.voice + '：模型应由音色决定')
+      assert.equal(body.input.voice, item.voice)
+      assert.equal(body.input.language_type !== undefined, item.voice === 'Nini')
+    } finally {
+      if (wav !== null) await rm(wav, { force: true })
+    }
+  }
+})
+
 test('voiceTtsProvider=aliyun 时 synthesizeToWav 走云端，不碰本机 TTS 服务', async () => {
   logs.length = 0
   const urls = []

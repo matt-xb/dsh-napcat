@@ -1,5 +1,6 @@
 /**
- * 阿里云百炼（DashScope）云端语音：识别用 qwen3-asr-flash，合成用 qwen3-tts-flash。
+ * 阿里云百炼（DashScope）云端语音：识别用 qwen3-asr-flash；合成模型由音色决定
+ * （带 _v3.1 后缀的音色属于 Audio-TTS，其余属于 qwen3-tts-flash）。
  *
  * 不引 SDK：两条都是普通 HTTPS POST，用原生 fetch。云端只做「听」和「嘴」的替代实现，
  * 上层（bridge 的 [语音] 回退、napcat_send_voice 的失败回退文字）完全不用改。
@@ -99,10 +100,13 @@ export function applyEmotionTag(text: string, emotion: unknown): string {
   return tag + text
 }
 
-/** 音色与模型明显错配时提个醒（不拦请求，官方错报比本地猜更准）。 */
+/** Audio-TTS 的系统音色一律带 _v3.1 后缀；这一位同时决定用哪套模型和端点。 */
+const AUDIO_VOICE_RE = /_v\d/i
+
+/** 音色与模型明显错配时提个醒（只在音色留空、模型走兜底时才可能发生）。 */
 function warnVoiceMismatch(model: string, voice: string, log: Log): void {
   const audioTts = supportsEmotionTag(model)
-  const hasSuffix = /_v\d/i.test(voice)
+  const hasSuffix = AUDIO_VOICE_RE.test(voice)
   if (audioTts && !hasSuffix) {
     log('warn', '音色 ' + voice + ' 与模型 ' + model + ' 可能不匹配：Qwen-Audio-TTS 的系统音色带 _v3.1 后缀，如 longanhuan_v3.1')
   } else if (!audioTts && hasSuffix) {
@@ -143,8 +147,16 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
     log('warn', '阿里云合成未配置 aliyunApiKey，跳过: ' + text.slice(0, 20))
     return null
   }
+  // 两套音色体系互不通用，换音色就得跟着换模型；与其让人记着同步改配置，
+  // 不如让音色自己说话：带 _v3.1 后缀的走 Audio-TTS，其余走 qwen3-tts-flash。
+  // aliyunTtsModel 只在音色留空时当兜底（此时没人能替它判断）。
+  const configuredVoice = String(config.aliyunTtsVoice ?? '').trim()
+  const audioVoice = AUDIO_VOICE_RE.test(configuredVoice)
+  const voice = configuredVoice || 'Cherry'
+  const model = configuredVoice === ''
+    ? String(config.aliyunTtsModel ?? '').trim() || 'qwen3-tts-flash'
+    : audioVoice ? 'qwen-audio-3.1-tts-flash' : 'qwen3-tts-flash'
   // 情绪标签是拼在正文前面的，所以上限按「标签 + 正文」算。
-  const model = String(config.aliyunTtsModel ?? '').trim() || 'qwen3-tts-flash'
   const emotionSupport = supportsEmotionTag(model)
   const tagged = emotionSupport ? applyEmotionTag(text, config.ttsEmotion) : text
   // 这套模型没有情感标签能力，emotion 会被静默丢掉——不吭声会让人以为参数已生效。
@@ -157,7 +169,6 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
     return null
   }
   try {
-    const voice = String(config.aliyunTtsVoice ?? '').trim() || 'Cherry'
     warnVoiceMismatch(model, voice, log)
     const body = emotionSupport
       ? audioTtsBody(model, tagged, voice, config)
@@ -180,7 +191,12 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
     log('debug', 'TTS 合成（阿里云）: ' + text.slice(0, 20) + ' → ' + wav)
     return wav
   } catch (error) {
-    log('warn', '云端合成失败（' + (error instanceof Error ? error.message : String(error)) + '）: ' + text.slice(0, 20))
+    // 带上模型和音色：错配时云端只会回一句 Engine error，不知道是哪一套撞了。
+    // abort 的原始文案是「This operation was aborted」，看着不像超时，这里说清楚。
+    const reason = error instanceof Error && error.name === 'AbortError'
+      ? '请求超时（超过 ' + String(config.ttsTimeoutMs ?? '') + 'ms）'
+      : error instanceof Error ? error.message : String(error)
+    log('warn', '云端合成失败（model=' + model + ' voice=' + voice + '）：' + reason + ': ' + text.slice(0, 20))
     return null
   }
 }
