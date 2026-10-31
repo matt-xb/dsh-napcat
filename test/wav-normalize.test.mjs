@@ -75,12 +75,13 @@ test('只有头没有音频帧的 wav 被拒', () => {
 
 test('synthesizeAliyun 落盘的 wav 头是真实长度（不是 0x7FFFFFFF）', async () => {
   logs.length = 0
-  const wav = await synthesizeAliyun('你好', baseConfig, log, { fetch: fetchTts(makeWav(960, { placeholderHeader: true })) })
+  // 用正好 1 秒的音频：补齐逻辑在这里是空操作，断言只盯头回填这一件事。
+  const wav = await synthesizeAliyun('你好', baseConfig, log, { fetch: fetchTts(makeWav(24000, { placeholderHeader: true })) })
   assert.equal(typeof wav, 'string')
   try {
     const buffer = await readFile(wav)
-    assert.equal(buffer.length, 44 + 1920, '音频字节一个不少')
-    assert.equal(buffer.readUInt32LE(40), 1920, 'data size 必须是真实值')
+    assert.equal(buffer.length, 44 + 48000, '音频字节一个不少')
+    assert.equal(buffer.readUInt32LE(40), 48000, 'data size 必须是真实值')
     assert.equal(buffer.readUInt32LE(4), buffer.length - 8)
   } finally {
     await rm(wav, { force: true })
@@ -103,12 +104,28 @@ test('synthesizeAliyun 拿到空壳 wav 时返回 null，不写坏文件', async
 test('本机 TTS 分支同样回填占位头', async () => {
   logs.length = 0
   const config = { ...baseConfig, voiceTtsProvider: 'local', ttsVoiceRef: 'D:/ref/a.wav' }
-  const wav = await synthesizeToWav('你好', config, log, { fetch: fetchAudio(makeWav(960, { placeholderHeader: true })) })
+  const wav = await synthesizeToWav('你好', config, log, { fetch: fetchAudio(makeWav(24000, { placeholderHeader: true })) })
   assert.equal(typeof wav, 'string')
   try {
     const buffer = await readFile(wav)
-    assert.equal(buffer.readUInt32LE(40), 1920)
+    assert.equal(buffer.readUInt32LE(40), 48000)
     assert.equal(buffer.readUInt32LE(4), buffer.length - 8)
+  } finally {
+    await rm(wav, { force: true })
+  }
+})
+
+test('synthesizeAliyun 落盘的 wav 时长是整秒，末音节不会被 QQ 的取整切掉', async () => {
+  logs.length = 0
+  // 3.36s 正是实测里会被 round 成 3s、整个末音节消失的典型长度。
+  const wav = await synthesizeAliyun('你好', baseConfig, log, { fetch: fetchTts(makeWav(80640)) })
+  assert.equal(typeof wav, 'string')
+  try {
+    const buffer = await readFile(wav)
+    const info = parseWav(buffer)
+    assert.equal(info.dataLength % (info.sampleRate * 2), 0, '落盘时长必须是整秒')
+    assert.equal(info.dataLength / (info.sampleRate * 2), 4, '3.36s 要补到 4s')
+    assert.ok(logs.some(item => item.level === 'debug' && /补齐静音/.test(item.message)), '补齐要留痕')
   } finally {
     await rm(wav, { force: true })
   }

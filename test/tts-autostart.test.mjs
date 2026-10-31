@@ -1,6 +1,7 @@
 // TTS 自愈：首次连接被拒 → 拉起服务 → 就绪后重试一次。全程假 fetch / 假 spawn，不真起进程。
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -26,7 +27,7 @@ const logFile = join(tmpdir(), 'dsh-napcat-test', 'tts_server.out')
 const refused = () => Object.assign(new Error('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9880'), { code: 'ECONNREFUSED' }) })
 const ok = body => ({ ok: true, status: 200, json: async () => body, arrayBuffer: async () => makeWav() })
 
-test('first fetch refused → auto start → retry succeeds once service is loaded', async () => {
+test('first fetch refused → auto start → retry succeeds once service is loaded', async (t) => {
   resetTtsAutoStart()
   logs.length = 0
   const spawned = []
@@ -57,6 +58,7 @@ test('first fetch refused → auto start → retry succeeds once service is load
   })
 
   assert.equal(typeof wav, 'string', '首次拒绝后应重试成功')
+  t.after(() => rm(wav, { force: true }))
   assert.equal(ttsCalls, 2, '只重试一次')
   assert.equal(spawned.length, 1, '只拉起一个进程')
   assert.match(spawned[0].command, /python\.exe$/)

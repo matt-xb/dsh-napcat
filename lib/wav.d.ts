@@ -1,5 +1,7 @@
 /** wav 结构校验与头回填：阿里云流式返回的 data 长度是占位值，落盘前必须按真实字节改写。 */
 export interface WavInfo {
+    /** fmt 块的 wFormatTag：1 = PCM。 */
+    audioFormat: number;
     channels: number;
     sampleRate: number;
     bitsPerSample: number;
@@ -19,4 +21,20 @@ export declare function parseWav(buffer: Buffer): WavInfo;
 export declare function normalizeWav(buffer: Buffer): {
     buffer: Buffer;
     fixed: boolean;
+};
+/**
+ * 差额小于这个值就不补。QQ 侧是 Math.round，小数部分一旦 ≥ 0.5 本来就会进位，差额 < 30ms 时
+ * 小数部分必然 ≥ 0.97，怎么取整都切不到有声部分，补它只是白送一段空白。
+ */
+export declare const PAD_MIN_MS = 30;
+/**
+ * 尾部补静音到下一个整秒，让最终 wav 时长天然是整数。
+ *
+ * NapCat 把小数的 duration 交给 QQ，QQ 侧按整秒收尾（Math.round），实测 38% 的合成音频会因此
+ * 丢掉有声尾巴——TTS 尾部静音只有 10–67ms，几乎贴着最后一个音节就结束。补到整秒后 floor/round
+ * 都切不到有声内容。补齐量由 ceil 保证一定 < 1 秒，不需要额外上限。非标准 PCM wav 原样返回。
+ */
+export declare function padWavToSecond(buffer: Buffer): {
+    buffer: Buffer;
+    paddedMs: number;
 };

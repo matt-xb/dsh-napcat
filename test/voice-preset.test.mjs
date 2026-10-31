@@ -47,6 +47,7 @@ test('音色解析：会话覆盖 > ttsVoices[ttsVoice] > ttsVoiceRef', async ()
     },
   }, KEY)
   assert.equal(typeof wav, 'string')
+  await rm(wav, { force: true })
   assert.equal(voice, PRESETS['原版'], 'TTS 请求用会话音色')
   resetVoiceOverride()
 })

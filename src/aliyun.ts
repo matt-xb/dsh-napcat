@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import type { Config } from './config.js'
 import { ensureTempDir } from './media.js'
 import type { LogLevel } from './onebot.js'
-import { normalizeWav } from './wav.js'
+import { normalizeWav, padWavToSecond } from './wav.js'
 
 type Log = (level: LogLevel, message: string) => void
 
@@ -183,11 +183,11 @@ export async function synthesizeAliyun(text: string, config: Config, log: Log, d
     if (buffer.length === 0) throw new Error('云端合成没有返回音频')
     const dir = await ensureTempDir()
     const isWav = buffer.subarray(0, 4).toString('latin1') === 'RIFF'
-    const normalized = isWav ? normalizeWav(buffer) : { buffer, fixed: false }
+    const normalized = isWav ? padWavToSecond(normalizeWav(buffer).buffer) : { buffer, paddedMs: 0 }
     const ext = isWav ? '.wav' : '.mp3'
     const wav = join(dir, 'tts-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + ext)
     await writeFile(wav, normalized.buffer)
-    if (normalized.fixed) log('debug', 'TTS 音频头是占位长度，已按实际字节回填: ' + normalized.buffer.length)
+    if (normalized.paddedMs > 0) log('debug', 'TTS 尾部补齐静音 ' + normalized.paddedMs + 'ms，总时长凑整秒: ' + normalized.buffer.length)
     log('debug', 'TTS 合成（阿里云）: ' + text.slice(0, 20) + ' → ' + wav)
     return wav
   } catch (error) {
