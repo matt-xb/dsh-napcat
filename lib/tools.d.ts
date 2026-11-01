@@ -13,7 +13,7 @@ export interface ToolDeps {
      * 同一轮同一会话同一内容只发一次：模型常在上一步成功后重新生成同一个发送调用。
      * 'claimed'=可以发（发送失败要 release 掉，允许真错误重试）；'repeat'=本轮已发过；'untracked'=不在活跃轮次。
      */
-    claimSendOnce?: (sessionId: string, chatKey: string, contentKey: string) => {
+    claimSendOnce?: (sessionId: string, chatKey: string, contentKey: string, content?: string) => {
         status: 'claimed';
         release: () => void;
     } | {

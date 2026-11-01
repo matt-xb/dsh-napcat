@@ -43,6 +43,12 @@ export declare function sanitizeReply(text: string): string | null;
 export declare function compactShortReply(text: string): string;
 /** Same-turn comparison only; preserve numbers, code and emotional punctuation. */
 export declare function replyDedupKey(text: string): string;
+/**
+ * 同轮近重复判定：模型把同一句话改个标点、换个词、砍掉后半句再发一次时，精确哈希拦不住。
+ * 阈值 0.5 按真实群会话校准：真重复（语音念文字、两步发改写版）覆盖率 ≥0.52，同轮两条不同正文 ≤0.33。
+ * shortcut: 只比字面，同义改写（中英混排换词）漏判；要覆盖得上语义模型。
+ */
+export declare function nearSameText(a: string, b: string): boolean;
 /** Tool and automatic sends share this wire boundary. */
 export declare function sanitizeOutgoingMessage(message: unknown): ObMessage;
 /** 会话标题：`MM-DD HH:mm`（本地时间；内容容易乱，所以只标时间）。 */

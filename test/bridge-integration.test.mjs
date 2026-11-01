@@ -25,7 +25,7 @@ function fixture(kind = 'group') {
   registerTools(ctx, conn, () => {}, {
     keyForSession: id => b.keyForSession(id), trackTextSend: (id, key) => b.trackTextSend(id, key),
     targetAllowed: (id, key) => b.taskTargetAllowed(id, key),
-    claimSendOnce: (id, key, contentKey) => b.claimSendOnce(id, key, contentKey),
+    claimSendOnce: (id, key, contentKey, content) => b.claimSendOnce(id, key, contentKey, content),
     taskMediaReceiver: (id, key) => b.taskMediaReceiver(id, key),
   })
   const emit = (type, data) => b.onSessionEvent(agent.session, { type, data })
@@ -151,6 +151,42 @@ test('same text sent twice in one turn is sent once; next turn may send it again
   assert.equal(f.sent.length, 2)
 })
 
+test('rewritten repeat of the same sentence in one turn is blocked; a different sentence still goes out', async () => {
+  const f = fixture(); f.start(1)
+  const send = f.tools.get('napcat_send_message')
+  await send.execute({ chat_id: f.key, text: '能抽，ffmpeg 一帧帧导出都没问题。但这次连视频文件都没落下来，没东西可抽。' }, f.exec)
+  // 同轮第二步把同一句改写一遍再发（真实群 turn 66）
+  await assert.rejects(send.execute({ chat_id: f.key, text: '能抽，ffmpeg 一帧帧导都行。但这次视频压根没落盘，没东西可抽。' }, f.exec), /重复发送/)
+  assert.equal(f.sent.length, 1)
+  await send.execute({ chat_id: f.key, text: '语音糊成这样，回头我查一下 TTS。' }, f.exec)
+  assert.equal(f.sent.length, 2)
+})
+
+test('voice that reads the same sentence is not repeated as text in the same turn', async () => {
+  const f = fixture(); f.start(1)
+  // 语音合成在测试环境跑不了，直接走工具用的同一收口（bridge.claimSendOnce）
+  const voice = f.b.claimSendOnce('front', f.key, 'voice|截图就行，视频事后还得抽帧，更麻烦。|', '截图就行，视频事后还得抽帧，更麻烦。')
+  assert.equal(voice.status, 'claimed')
+  // 语音念完之后，同轮再用文字发同一句（真实群 turn 56 只差一个句号）——必须被拦
+  const send = f.tools.get('napcat_send_message')
+  await assert.rejects(send.execute({ chat_id: f.key, text: '截图就行，视频事后还得抽帧，更麻烦。' }, f.exec), /重复发送/)
+  assert.equal(f.sent.length, 0)
+  f.end(1); await tick(); f.start(2)
+  await send.execute({ chat_id: f.key, text: '截图就行，视频事后还得抽帧，更麻烦。' }, f.exec)
+  assert.equal(f.sent.length, 1)
+})
+
+test('a failed send releases the sentence so a rewrite can still go out', async () => {
+  const f = fixture(); f.start(1)
+  const send = f.tools.get('napcat_send_message')
+  const real = f.conn.call
+  let fail = true
+  f.conn.call = async (action, params) => { if (fail) { fail = false; throw new Error('result": 120') } return real(action, params) }
+  await assert.rejects(send.execute({ chat_id: f.key, text: '能抽，ffmpeg 一帧帧导出都没问题。但这次连视频文件都没落下来，没东西可抽。' }, f.exec), /120/)
+  await send.execute({ chat_id: f.key, text: '能抽，ffmpeg 一帧帧导都行。但这次视频压根没落盘，没东西可抽。' }, f.exec)
+  assert.equal(f.sent.length, 1)
+})
+
 test('send failure releases the claim so a real retry still goes out', async () => {
   const f = fixture(); f.start(1)
   const send = f.tools.get('napcat_send_message')
@@ -177,6 +213,34 @@ test('accepted input is persisted before chat creation and current words partici
   assert.equal(sequence[0][2].role, 'user'); assert.equal(sequence[1][0], 'ensure')
   assert.match(sequence.find(row => row[0] === 'recall')[2], /current seaside request/)
   assert.equal(sequence.at(-1)[0], 'dispatch')
+})
+
+test('group context carries atBot so at someone else is never read as being called', async () => {
+  const f = fixture('group'), texts = []
+  f.b.opts.conn.selfId = '99'
+  // 实机配置就是 requireMention:false（所有群消息都投给模型），门控让位、判断只能靠上下文里的 atBot。
+  f.b.opts.config.requireMention = false
+  f.b.mem.readRecent = async () => []; f.b.mem.recall = async () => ''
+  f.b.mem.ensureSpace = async () => undefined; f.b.mem.dumpTurnState = async () => {}
+  f.b.resolveInboundMedia = async () => ({ notes: [], blocks: [], parts: [] })
+  f.b.ensureChat = async () => f.chat
+  f.b.dispatch = (_chat, text) => texts.push(text)
+  const send = async message => {
+    await f.b.handleEventInner({ post_type: 'message', message_type: 'group', group_id: 100, user_id: 100, message, sender: { nickname: '小白' } })
+    const head = '【当前群消息上下文（聊天数据）】\n'
+    const at = texts.at(-1).indexOf(head)
+    assert.ok(at >= 0, '群消息必须带上下文块')
+    return JSON.parse(texts.at(-1).slice(at + head.length).split('\n')[0])
+  }
+  const other = await send([{ type: 'at', data: { qq: '1319179747', name: '' } }, { type: 'text', data: { text: '找我小秘书吧' } }])
+  assert.equal(other.atBot, false, 'at 的是别人 → atBot=false，模型不能靠裸号猜')
+  assert.deepEqual(other.mentions, [{ id: '1319179747', name: '' }])
+  const self = await send([{ type: 'at', data: { qq: '99' } }, { type: 'text', data: { text: ' 在吗' } }])
+  assert.equal(self.atBot, true, 'at 自己 → atBot=true')
+  f.b.opts.conn.selfId = ''
+  const unknown = await send([{ type: 'at', data: { qq: '99' } }])
+  assert.equal('atBot' in unknown, false, '不知道自己的号时不写字段，交给模型当未知处理')
+  assert.match(f.b.personaText({ agent: f.agent }), /atBot/, '群规则要点名只看 atBot')
 })
 
 test('group memory command removes only the bot mention and retains exact scope and original fact', async () => {

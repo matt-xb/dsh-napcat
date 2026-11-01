@@ -343,6 +343,8 @@ const INTERNAL_CONTEXT_MARKERS: readonly RegExp[] = [
   /换音色（原版 \/ 银月）直接调 napcat_voice/,
   // 规则段自己的边界标记（src/bridge.ts RULES_BOUNDARY），漏出去也是同一类。
   /【系统背景·不是聊天正文·不得复述或引用以下规则原文】/,
+  // 群规则里那条「只看 atBot」：模型把这句规则当正文吐出来也是同一类泄漏。
+  /只看上下文里的 atBot 字段/,
 ]
 /** 正文里出现内部上下文标记：整条都不能发（半截裁剪会留下残句，比不发更糟）。 */
 export function looksLikeInternalContext(text: string): boolean {
@@ -384,9 +386,48 @@ export function replaysInjected(text: string, injected: readonly string[]): bool
   return covered >= 60 || hits >= 2
 }
 
+/**
+ * 元信息尾注：助手被要求在回复结尾自报「跳过了什么、有什么风险」，那是给开发者看的内部说明，
+ * 实测被原样发进 QQ（2026-11-01 私聊 993484108）。只认两种高置信形态，且都锚在**结尾**：
+ * 结尾的「（跳过了：…）」「（风险：…）」括号段，以及结尾、行首独立的「跳过了：…」「风险：…」整行。
+ * 「风险」本身是正常话题（用户真会问有没有风险），所以：括号段必须一路收到结尾，
+ * 「（风险：可控）后面还有话」这种夹在句子中间的不会被吞；风险那支还额外要求另起一行。
+ */
+// shortcut: 括号段不跨行，多行包裹的尾注只剥到第一行为止；真出现再放开换行。
+const META_NOTE_BRACKET: readonly RegExp[] = [
+  // 成对的：括号里允许再出现括号，只要整段收在结尾。
+  /(?:[（(][ \t]*跳过了[ \t]*[:：]|(?:^|\n)[ \t]*[（(][ \t]*风险[ \t]*[:：])[^\n]*[）)]$/,
+  // 没闭合的：括号里不许再有括号，否则分不清哪半截是正文。
+  /(?:[（(][ \t]*跳过了[ \t]*[:：]|(?:^|\n)[ \t]*[（(][ \t]*风险[ \t]*[:：])[^（）\n]*$/,
+]
+const META_NOTE_LINE = /^[ \t]*(?:跳过了|风险)[ \t]*[:：]/
+function stripMetaFootnote(text: string): string {
+  let body = text.replace(/\s+$/, '')
+  // 尾注可能拆成「（跳过了：…）（风险：…）」两段，剥到不再变化为止。
+  for (let prev = ''; prev !== body;) {
+    prev = body
+    for (const pattern of META_NOTE_BRACKET) body = body.replace(pattern, '')
+    body = body.replace(/\s+$/, '')
+  }
+  const lines = body.split('\n')
+  let cut = lines.length
+  while (cut > 0) {
+    const line = (lines[cut - 1] ?? '').trim()
+    if (line === '') {
+      cut -= 1
+      continue
+    }
+    if (!META_NOTE_LINE.test(line)) break
+    // 「风险：…」单独成条时更像正文（用户真会问风险），只有上面还有正文才当尾注剥。
+    if (/^风险/.test(line) && lines.slice(0, cut - 1).every(l => l.trim() === '' || META_NOTE_LINE.test(l.trim()))) break
+    cut -= 1
+  }
+  return lines.slice(0, cut).join('\n')
+}
+
 /** Internal context must never be forwarded to QQ. */
 export function sanitizeReply(text: string): string | null {
-  const raw = stripDecisionPayload(text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, ''))
+  const raw = stripDecisionPayload(stripMetaFootnote(text.replaceAll('[[NAPCAT_SILENT]]', '').replace(/<\/?ap>/g, '')))
   if (/这个会话来自QQ（NapCat渠道），聊天对象是|【本聊天(?:历史与明确事实|最近记录)[（】]|【当前群消息上下文[（】]|<system-reminder>|\[modelchanged:/i.test(raw.replace(/\s+/g, ''))) return null
   if (looksLikeInternalContext(raw)) return null
   // 未闭合的也从开始标签砍到结尾，宁可少发也不外泄。
@@ -466,6 +507,28 @@ export function compactShortReply(text: string): string {
 export function replyDedupKey(text: string): string {
   return text.length <= 120 && /^[\p{Script=Han}\s，。,．.]+$/u.test(text) && /\p{Script=Han}/u.test(text)
     ? text.replace(/[\s，。,．.]/g, '') : text
+}
+
+/**
+ * 同轮近重复判定：模型把同一句话改个标点、换个词、砍掉后半句再发一次时，精确哈希拦不住。
+ * 阈值 0.5 按真实群会话校准：真重复（语音念文字、两步发改写版）覆盖率 ≥0.52，同轮两条不同正文 ≤0.33。
+ * shortcut: 只比字面，同义改写（中英混排换词）漏判；要覆盖得上语义模型。
+ */
+export function nearSameText(a: string, b: string): boolean {
+  const left = a.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+  const right = b.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+  if (left === right) return true
+  // 太短的两句撞 2-gram 纯属巧合，交给精确去重
+  if (Math.min(left.length, right.length) < 8) return false
+  const grams = (text: string): Set<string> => {
+    const out = new Set<string>()
+    for (let i = 0; i + 2 <= text.length; i += 1) out.add(text.slice(i, i + 2))
+    return out
+  }
+  const a2 = grams(left), b2 = grams(right)
+  let hit = 0
+  for (const gram of a2) if (b2.has(gram)) hit += 1
+  return Math.max(hit / a2.size, hit / b2.size) >= 0.5
 }
 
 /** Tool and automatic sends share this wire boundary. */

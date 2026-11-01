@@ -72,7 +72,7 @@ export function apply(ctx: Context, rawConfig: ConfigShape): void {
     targetAllowed: (sessionId, chatKey) => bridge.taskTargetAllowed(sessionId, chatKey),
     trackTextSend: (sessionId, chatKey) => bridge.trackTextSend(sessionId, chatKey),
     markOutputSent: (sessionId, chatKey) => bridge.markOutputSent(sessionId, chatKey),
-    claimSendOnce: (sessionId, chatKey, contentKey) => bridge.claimSendOnce(sessionId, chatKey, contentKey),
+    claimSendOnce: (sessionId, chatKey, contentKey, content) => bridge.claimSendOnce(sessionId, chatKey, contentKey, content),
     taskMediaReceiver: (sessionId, chatKey) => bridge.taskMediaReceiver(sessionId, chatKey),
     get stickerRoot() { return config.stickerRoot },
     recentImages: chatKey => config.memoryEnabled ? bridge.mem.readRecentImages(chatKey) : Promise.resolve([]),

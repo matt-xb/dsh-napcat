@@ -59,7 +59,7 @@ export interface ToolDeps {
    * 同一轮同一会话同一内容只发一次：模型常在上一步成功后重新生成同一个发送调用。
    * 'claimed'=可以发（发送失败要 release 掉，允许真错误重试）；'repeat'=本轮已发过；'untracked'=不在活跃轮次。
    */
-  claimSendOnce?: (sessionId: string, chatKey: string, contentKey: string) => { status: 'claimed'; release: () => void } | { status: 'repeat' } | { status: 'untracked' }
+  claimSendOnce?: (sessionId: string, chatKey: string, contentKey: string, content?: string) => { status: 'claimed'; release: () => void } | { status: 'repeat' } | { status: 'untracked' }
   taskMediaReceiver?: (sessionId: string, chatKey: string) => ((media: { kind: 'image' | 'file'; url: string; name: string; caption?: string }) => Promise<void>) | undefined
   recordImageSend?: (chatKey: string, source: string, name: string) => Promise<void>
   recentImages?: (chatKey: string) => Promise<string[]>
@@ -108,10 +108,11 @@ export function registerTools(
   /**
    * 同轮同会话同内容只发一次：模型常在工具成功后重生成同一个调用（参数只差 chat_id）。
    * 重复的直接拒绝；返回 release，真发送失败时调用，允许下一轮/下一次正常重试。
+   * content 是正文本身：改标点、换几个词的同一句话，以及刚被语音念过的文字，一起挡掉。
    */
-  const claimOnce = (exec: unknown, chatKey: string, contentKey: string): () => void => {
+  const claimOnce = (exec: unknown, chatKey: string, contentKey: string, content?: string): () => void => {
     const sessionId = (exec as { agent?: { session?: { id?: unknown } } } | undefined)?.agent?.session?.id
-    const claim = deps.claimSendOnce?.(String(sessionId ?? ''), chatKey, contentKey)
+    const claim = deps.claimSendOnce?.(String(sessionId ?? ''), chatKey, contentKey, content)
     if (claim?.status === 'repeat') throw new Error('本轮已经给 ' + chatKey + ' 发过同样的内容，本次重复发送已拦下（不要重发，继续下一步或沉默）')
     return claim?.status === 'claimed' ? claim.release : () => {}
   }
@@ -147,7 +148,7 @@ export function registerTools(
       if (clean === null) throw new Error('拒绝外发内部上下文或模型通知')
       const chunks = splitText(clean, 1200)
       if (chunks.length === 0) throw new Error('空消息不外发')
-      const release = claimOnce(exec, target.kind + ':' + target.id, 'text|' + replyDedupKey(clean.trim()))
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'text|' + replyDedupKey(clean.trim()), clean.trim())
       const sent = deps.trackTextSend?.(String(exec?.agent?.session?.id ?? ''), target.kind + ':' + target.id)
       const ids: string[] = []
       try {
@@ -247,7 +248,7 @@ export function registerTools(
       const pureText = segments.length > 0 && segments.every(seg => seg.type === 'text' || seg.type === 'reply')
       const pureTextBody = pureText ? segments.filter(seg => seg.type === 'text').map(seg => String(seg.data?.text ?? '')).join('') : ''
       const release = sending && pureText && pureTextBody.trim() !== ''
-        ? claimOnce(exec, targetKind + ':' + String(targetId), 'text|' + replyDedupKey(pureTextBody.trim()))
+        ? claimOnce(exec, targetKind + ':' + String(targetId), 'text|' + replyDedupKey(pureTextBody.trim()), pureTextBody.trim())
         : () => {}
       const sent = pureText ? deps.trackTextSend?.(String(exec?.agent?.session?.id ?? ''), targetKind + ':' + String(targetId)) : undefined
       let data: unknown
@@ -416,7 +417,7 @@ export function registerTools(
           ? '语音合成失败：阿里云合成没成功，具体 code/message 见插件日志（已记录 model 与 voice），改用文字发送'
           : '语音合成失败：TTS 服务不可用或超时（' + String(config.ttsServerUrl) + '），改用文字发送')
       }
-      const release = claimOnce(exec, target.kind + ':' + target.id, 'voice|' + text + '|' + (input.emotion ?? ''))
+      const release = claimOnce(exec, target.kind + ':' + target.id, 'voice|' + text + '|' + (input.emotion ?? ''), text)
       const file = 'file:///' + wav.replace(/\\/g, '/')
       checkTarget(exec, target.kind + ':' + target.id)
       let result: { message_id?: number | string }

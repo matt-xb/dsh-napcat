@@ -95,7 +95,7 @@ export declare class Bridge {
     }) => Promise<void>) | undefined;
     markOutputSent(sessionId: string, chatKey: string): void;
     /** 同轮同会话同内容只放行一次；发送失败由调用方 release，真错误仍能重试。 */
-    claimSendOnce(sessionId: string, chatKey: string, contentKey: string): {
+    claimSendOnce(sessionId: string, chatKey: string, contentKey: string, content?: string): {
         status: 'claimed';
         release: () => void;
     } | {
